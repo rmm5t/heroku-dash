@@ -5,6 +5,7 @@ import {errorMessage} from '../api.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
+import {OVERVIEW_COLUMNS, overviewColumns} from './columns.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, tabIcons} from './theme.js'
 
 const SIDEBAR_WIDTH = '22%'
@@ -52,6 +53,13 @@ export class Dashboard {
     this.summary = blessed.box({parent, top: 6, height: 5, left: SIDEBAR_WIDTH, right: 0, padding: {left: 2, right: 1}, style: {fg: palette.fg, bg: palette.bg}})
     this.main = blessed.list({parent, top: 11, height: '40%-4', left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.apps}  Apps `, keys: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bg: palette.selected, fg: 'white'}, item: {fg: palette.fg}}})
+    this.columnHeader = blessed.box({parent: this.main, top: -1, left: 0, right: 1, height: 1, fixed: true, hidden: true, tags: false, autoFocus: false,
+      style: {fg: palette.muted, bg: palette.panel, bold: true}})
+    this.columnHeader.on('click', () => {
+      if (this.modal || this.closed) return
+      this.main.focus()
+      this.render()
+    })
     this.detail = blessed.box({parent, top: '40%+7', bottom: 4, left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.overview}  Details `, padding: {left: 1, right: 1}, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}})
     this.status = blessed.box({parent, bottom: 2, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.muted, bg: palette.bg}})
@@ -192,6 +200,7 @@ export class Dashboard {
 
   render() {
     if (this.closed) return
+    this.layoutColumns()
     const team = this.app || this.pipeline ? this.breadcrumbTeam?.name ?? 'Loading team…' : this.team?.name
     const pipeline = this.pipeline?.name ?? (this.app ? this.data ? this.data.errors.coupling ? 'Pipeline unavailable' : 'No pipeline' : 'Loading pipeline…' : null)
     const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
@@ -414,12 +423,30 @@ export class Dashboard {
     this.updatingRows = true
     try {
       this.rows = rows
-      this.main.setItems(rows.map(rowLabel))
+      this.main.setItems(rows.map(row => rowLabel(row, this.main.width - this.main.iwidth - 1)))
       this.main.select(Math.min(selected, Math.max(0, rows.length - 1)))
     } finally {
       this.updatingRows = false
     }
     this.drawDetail()
+  }
+
+  layoutColumns() {
+    const columnar = this.rows.some(row => row.columns)
+    this.main.padding.top = columnar ? 1 : 0
+    // Keep the border label above the new header padding (Blessed normally
+    // repositions labels only after scrolling or resizing).
+    if (this.main._label) this.main._label.rtop = this.main.childBase - this.main.itop
+    if (!columnar) { this.columnHeader.hide(); return }
+    const width = this.main.width - this.main.iwidth - 1
+    this.columnHeader.setContent(`    ${overviewColumns(OVERVIEW_COLUMNS, width - 4)}`)
+    this.columnHeader.show()
+    this.columnHeader.setFront()
+    // Reflow on resize without rebuilding the list or changing its selection.
+    for (const [index, row] of this.rows.entries()) {
+      const label = rowLabel(row, width)
+      if (this.main.ritems[index] !== label) this.main.setItem(index, label)
+    }
   }
 
   drawDetail() {

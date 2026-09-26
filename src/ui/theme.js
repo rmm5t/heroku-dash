@@ -1,5 +1,6 @@
 import blessed from 'blessed'
 import {clean, single} from './text.js'
+import {overviewColumns} from './columns.js'
 
 export const palette = {
   bg: '#161b22', panel: '#1c212b', fg: '#c9d1d9', muted: '#8b949e',
@@ -68,8 +69,8 @@ export function stateStyle(state) {
   return {icon: 'stopped', tone: 'muted'}
 }
 
-export function rowLabel(row) {
-  const text = single(row.label)
+export function rowLabel(row, width = 90) {
+  const text = row.columns ? overviewColumns(row.columns, Math.max(0, width - 4)) : single(row.label)
   const emphasis = row.emphasis ? single(row.emphasis) : ''
   let offset = emphasis ? text.indexOf(emphasis) : -1
   // A state such as "up" must highlight the state column, not "backup.1".

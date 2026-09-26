@@ -35,18 +35,28 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
   const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
   const rows = []
   const error = section => {
-    if (errors[section]) rows.push(row(`${section} unavailable`, errors[section], {icon: 'error', tone: 'error', emphasis: 'unavailable'}))
+    if (errors[section]) rows.push(row(`${section} unavailable`, errors[section], {
+      icon: 'error', tone: 'error', emphasis: 'unavailable',
+      ...(tab === 'Overview' ? {columns: [section, 'unavailable', '—', 'Error']} : {}),
+    }))
   }
   if (tab === 'Overview') {
     rows.push(row(`${app.name}  ·  ${app.maintenance ? 'MAINTENANCE' : 'ACTIVE'}`, lines([
       ['App', app.name], ['Team', app.team?.name ?? 'Personal / shared'], ['Region', app.region?.name],
       ['Stack', app.stack?.name], ['Generation', app.generation?.name], ['Web URL', app.web_url],
       ['Git URL', app.git_url], ['Created', app.created_at], ['Updated', app.updated_at], ['ID', app.id],
-    ]), {...stateStyle(app.maintenance ? 'maintenance' : 'active'), emphasis: app.maintenance ? 'MAINTENANCE' : 'ACTIVE'}))
+    ]), {...stateStyle(app.maintenance ? 'maintenance' : 'active'), emphasis: app.maintenance ? 'MAINTENANCE' : 'ACTIVE',
+      columns: ['App', app.name, '—', app.maintenance ? 'MAINTENANCE' : 'ACTIVE']}))
     rows.push(row(`${formation.reduce((n, f) => n + f.quantity, 0)} configured dynos  ·  ${addons.length} add-ons`,
-      'Use Resources to inspect and scale process types.\nUse Add-ons to inspect plans and attachments.\nConfig values are masked until explicitly revealed.', {icon: 'resources'}))
-    for (const f of formation) rows.push(row(`${f.type}  ·  ${f.quantity} × ${f.size}`, f.command, {icon: 'resources', tone: f.quantity ? 'cyan' : 'muted'}))
-    if (releases[0]) rows.push(row(`Latest release: v${releases[0].version}  ·  ${releases[0].status}`, releases[0].description, {...stateStyle(releases[0].status), emphasis: releases[0].status}))
+      'Use Resources to inspect and scale process types.\nUse Add-ons to inspect plans and attachments.\nConfig values are masked until explicitly revealed.', {
+        icon: 'resources', columns: ['Total dynos', errors.addons ? 'Add-ons unavailable' : `${addons.length} add-ons`, errors.formation ? '—' : formation.reduce((n, f) => n + f.quantity, 0), errors.formation ? 'Unavailable' : 'Configured'],
+      }))
+    for (const f of formation) rows.push(row(`${f.type}  ·  ${f.quantity} × ${f.size}`, lines([
+      ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
+    ]), {icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', columns: [f.type, f.size, f.quantity, f.quantity ? 'Configured' : 'Scaled to 0']}))
+    if (releases[0]) rows.push(row(`Latest release: v${releases[0].version}  ·  ${releases[0].status}`, releases[0].description, {
+      ...stateStyle(releases[0].status), emphasis: releases[0].status, columns: ['Latest release', `v${releases[0].version}`, '—', releases[0].status],
+    }))
     for (const section of Object.keys(errors)) error(section)
   }
   if (tab === 'Resources') {
