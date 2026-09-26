@@ -53,6 +53,31 @@ test('config reveal is scoped to selection and hidden on changing views', async 
   assert.equal(d.revealed, null)
 })
 
+test('h/l wrap through views in every pane without opening selected items', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('l')
+  assert.equal(d.app, null)
+  await key('\r')
+  const app = d.app
+  for (const pane of [d.main, d.nav, d.detail]) {
+    pane.focus()
+    await key('h')
+    assert.equal(d.tab, 6)
+    await key('l')
+    assert.equal(d.tab, 0)
+    await key('l')
+    assert.equal(d.tab, 1)
+    await key('h')
+    assert.equal(d.tab, 0)
+    assert.equal(d.app, app)
+  }
+  await key('/')
+  await key('hl')
+  await key('\r')
+  assert.equal(d.filter, 'hl')
+  assert.equal(d.tab, 0)
+})
+
 test('filter input receives shortcut letters without changing navigation', async t => {
   const {dashboard: d, key} = await harness(t)
   await key('/')

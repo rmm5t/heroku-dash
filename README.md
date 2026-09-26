@@ -85,7 +85,7 @@ Pipeline stages are color-coded: **blue** development, **purple** review, **ambe
 | `/` | Filter sidebar names; submit an empty filter to clear |
 | `Esc` | Return to pipeline / workspace, clear a sidebar filter, or cancel a prompt |
 | `1`–`7` | Select an app view |
-| `[` / `]`, `←` / `→` | Previous / next app view |
+| `h` / `l`, `[` / `]`, `←` / `→` | Previous / next app view |
 | `R` | Refresh the current app, pipeline, or workspace catalog |
 | `Ctrl-L` | Redraw the terminal |
 | `o` | Open the corresponding Heroku web dashboard page |

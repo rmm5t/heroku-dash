@@ -33,17 +33,17 @@ export class Dashboard {
   widgets() {
     const parent = this.screen
     this.header = blessed.box({parent, top: 0, height: 3, left: 0, right: 0, padding: {left: 2}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
-    this.nav = blessed.list({parent, top: 3, bottom: 4, left: 0, width: '28%', ...frame(), label: ` ${icons.pipelines}  Pipelines `, keys: true, vi: true, mouse: true, tags: false,
+    this.nav = blessed.list({parent, top: 3, bottom: 4, left: 0, width: '28%', ...frame(), label: ` ${icons.pipelines}  Pipelines `, keys: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bg: palette.selected, fg: 'white', bold: true}, item: {fg: palette.fg}}})
     this.tabs = blessed.box({parent, top: 3, height: 3, left: '28%', right: 0, ...frame(), padding: {left: 1}, style: {...frame().style, fg: palette.accent}})
     this.summary = blessed.box({parent, top: 6, height: 5, left: '28%', right: 0, padding: {left: 2, right: 1}, style: {fg: palette.fg, bg: palette.bg}})
-    this.main = blessed.list({parent, top: 11, height: '40%-4', left: '28%', right: 0, ...frame(), label: ` ${icons.apps}  Apps `, keys: true, vi: true, mouse: true, tags: false,
+    this.main = blessed.list({parent, top: 11, height: '40%-4', left: '28%', right: 0, ...frame(), label: ` ${icons.apps}  Apps `, keys: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bg: palette.selected, fg: 'white'}, item: {fg: palette.fg}}})
     this.detail = blessed.box({parent, top: '40%+7', bottom: 4, left: '28%', right: 0, ...frame(), label: ` ${icons.overview}  Details `, padding: {left: 1, right: 1}, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}})
     this.status = blessed.box({parent, bottom: 2, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.muted, bg: palette.bg}})
     this.footer = blessed.box({parent, bottom: 0, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.fg, bg: palette.panel},
-      content: `${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Esc', 'back'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${[['j/k', 'move'], ['1–7 / [ ]', 'views'], ['R', 'refresh'], ['o', 'browser'], ['?', 'help'], ['q', 'quit']].map(([key, text]) => shortcut(key, text)).join('  ')}`})
+      content: `${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Esc', 'back'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${[['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R', 'refresh'], ['o', 'browser'], ['?', 'help'], ['q', 'quit']].map(([key, text]) => shortcut(key, text)).join('  ')}`})
     this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: 'heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit'})
     this.screen.on('resize', () => this.render())
     this.main.on('select item', () => {
@@ -67,6 +67,12 @@ export class Dashboard {
   }
 
   bindings() {
+    // Bind list movement explicitly: Blessed's vi mode also treats l as Enter,
+    // which would open a sidebar item while switching to the next app view.
+    for (const list of [this.nav, this.main]) {
+      list.key(['j'], () => { list.down(); this.render() })
+      list.key(['k'], () => { list.up(); this.render() })
+    }
     const key = (keys, action) => this.screen.key(keys, (...args) => {
       if (!this.modal && !this.closed) action(...args)
     })
@@ -89,8 +95,8 @@ export class Dashboard {
     key(['/'], () => void this.filterNav())
     key(['escape'], () => void this.back())
     key(['R'], () => void this.reload())
-    key(['[', 'left'], () => this.changeTab((this.tab + TABS.length - 1) % TABS.length))
-    key([']', 'right'], () => this.changeTab((this.tab + 1) % TABS.length))
+    key(['[', 'left', 'h'], () => this.changeTab((this.tab + TABS.length - 1) % TABS.length))
+    key([']', 'right', 'l'], () => this.changeTab((this.tab + 1) % TABS.length))
     for (let i = 0; i < TABS.length; i++) key([String(i + 1)], () => this.changeTab(i))
     key(['v'], () => {
       const selected = this.rows[this.main.selected]
@@ -485,7 +491,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  [ / ], ← / →    Previous / next app view\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nLeaving the tab or app hides revealed values.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nLeaving the tab or app hides revealed values.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
