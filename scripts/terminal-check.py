@@ -12,7 +12,10 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--repo', help='Repository for a live read-only check; omit for offline demo')
+parser.add_argument('--resources', action='store_true', help='Also verify companion costs in a live pipeline with dynos and add-ons')
 args = parser.parse_args()
+if args.resources and not args.repo:
+    parser.error('--resources requires --repo')
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 36, 120, 0, 0))
 command = ['heroku', 'dash', '--read-only', '--refresh', '0']
@@ -64,6 +67,15 @@ try:
     send(b'2')
     send(b's')
     wait_for('Read-only mode')
+    if args.resources:
+        send(b'\t')  # Focus Details, then scroll down to cost/allocation fields.
+        send(b'\x06')
+        wait_for('Estimated cost')
+        send(b'3')
+        # The previous status returns once the loading animation finishes.
+        wait_for('Read-only mode')
+        send(b'\x06')
+        wait_for('Billed cost')
     os.write(master, b'q')
     deadline = time.monotonic() + 10
     while process.poll() is None and time.monotonic() < deadline:
@@ -73,7 +85,7 @@ try:
             except OSError:
                 break
     assert process.wait(timeout=1) == 0
-    print(f'PASS: {"live read-only" if args.repo else "offline demo"} TTY startup, app navigation, metrics, help, write blocking, and clean exit')
+    print(f'PASS: {"live read-only" if args.repo else "offline demo"} TTY startup, app navigation, metrics, help, write blocking, {"companion cost details, " if args.resources else ""}and clean exit')
 finally:
     if process.poll() is None:
         process.terminate()

@@ -1,5 +1,6 @@
 import {clean, single} from './text.js'
 import {stateStyle} from './theme.js'
+import {addonDetails, dynoDetails} from './resource-details.js'
 
 export {clean, single} from './text.js'
 export function age(date, now = Date.now()) {
@@ -30,7 +31,7 @@ export function operationalMetrics(data) {
   }
 }
 
-export function appRows(tab, data, {config, configError, revealed = new Set()} = {}) {
+export function appRows(tab, data, {config, configError, revealed = new Set(), resources} = {}) {
   const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
   const rows = []
   const error = section => {
@@ -53,22 +54,25 @@ export function appRows(tab, data, {config, configError, revealed = new Set()} =
     for (const f of formation) rows.push(row(`${f.type.padEnd(16)} ${String(f.quantity).padStart(3)} × ${f.size}    [s] scale`, lines([
       ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
       ['Updated', f.updated_at], ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
-    ]), {kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type}))
+    ]) + dynoDetails(resources, 'formations', f.type), {kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type}))
     for (const d of dynos) rows.push(row(`  ${d.name.padEnd(20)} ${d.state.padEnd(10)} ${d.size}  ·  ${age(d.created_at)}`, lines([
       ['Dyno', d.name], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
       ['Created', d.created_at], ['Command', d.command],
-    ]), {...stateStyle(d.state), emphasis: d.state}))
+    ]) + dynoDetails(resources, 'instances', d.name), {...stateStyle(d.state), emphasis: d.state}))
   }
   if (tab === 'Add-ons') {
     error('addons'); error('attachments')
     const all = new Map(addons.map(addon => [addon.id, addon]))
     for (const attachment of attachments) if (!all.has(attachment.addon.id)) all.set(attachment.addon.id, attachment.addon)
-    for (const addon of all.values()) rows.push(row(`${addon.name}  ·  ${addon.plan?.name ?? 'shared attachment'}  ·  ${addon.state ?? '—'}`, lines([
-      ['Name', addon.name], ['Service', addon.addon_service?.name], ['Plan', addon.plan?.name],
-      ['State', addon.state], ['Billing app', addon.app?.name], ['Created', addon.created_at],
-      ['Attachments', attachments.filter(a => a.addon.id === addon.id).map(a => a.name).join(', ') || '—'],
-      ['Config keys', addon.config_vars?.join(', ')], ['ID', addon.id],
-    ]), {...stateStyle(addon.state), icon: /postgres|redis|mysql|mongo|key-value/i.test(addon.addon_service?.name ?? addon.plan?.name ?? '') ? 'database' : 'addons', emphasis: addon.state}))
+    for (const addon of all.values()) {
+      const state = resources?.data?.addons?.byId?.[addon.id]?.state ?? addon.state
+      rows.push(row(`${addon.name}  ·  ${addon.plan?.name ?? 'shared attachment'}  ·  ${state ?? '—'}`, lines([
+        ['Name', addon.name], ['Service', addon.addon_service?.name], ['Plan', addon.plan?.name],
+        ['State', state], ['Billing app', addon.app?.name], ['Created', addon.created_at],
+        ['Attachments', attachments.filter(a => a.addon.id === addon.id).map(a => a.name).join(', ') || '—'],
+        ['Config keys', addon.config_vars?.join(', ')], ['ID', addon.id],
+      ]) + addonDetails(resources, addon.id), {...stateStyle(state), icon: /postgres|redis|mysql|mongo|key-value/i.test(addon.addon_service?.name ?? addon.plan?.name ?? '') ? 'database' : 'addons', emphasis: state}))
+    }
   }
   if (tab === 'Config') {
     if (configError) rows.push(row('Config vars unavailable', configError, {icon: 'error', tone: 'error', emphasis: 'unavailable'}))

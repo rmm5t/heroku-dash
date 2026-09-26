@@ -64,7 +64,7 @@ export function scannerFrame(frame) {
 export function stateStyle(state) {
   if (['up', 'idle', 'succeeded', 'provisioned', 'active'].includes(state)) return {icon: 'success', tone: 'success'}
   if (['crashed', 'failed', 'error'].includes(state)) return {icon: 'error', tone: 'error'}
-  if (['starting', 'pending', 'provisioning', 'deprovisioning', 'maintenance'].includes(state)) return {icon: 'clock', tone: 'warning'}
+  if (['starting', 'pending', 'provisioning', 'deprovisioning', 'maintenance', 'upgrade pending', 'plan change pending'].includes(state)) return {icon: 'clock', tone: 'warning'}
   return {icon: 'stopped', tone: 'muted'}
 }
 

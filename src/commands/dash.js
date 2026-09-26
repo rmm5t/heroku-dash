@@ -2,6 +2,7 @@ import {Command} from '@heroku-cli/command'
 import {Flags} from '@oclif/core'
 import {HerokuAPI} from '../api.js'
 import {inspectProject, resolveContext} from '../project.js'
+import {loadResourcesIntegration} from '../resources.js'
 
 export default class Dash extends Command {
   static promptFlagActive = false
@@ -42,6 +43,7 @@ export default class Dash extends Command {
       context.team = catalog.teams.find(t => t.id === flags.team || t.name === flags.team)
       if (!context.team) this.error(`Team not found: ${flags.team}`)
     }
-    await runDashboard({api, catalog, context, refresh: flags.refresh})
+    const resources = await loadResourcesIntegration(this.config, api)
+    await runDashboard({api, catalog, context, resources, refresh: flags.refresh})
   }
 }

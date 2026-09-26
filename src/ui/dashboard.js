@@ -11,8 +11,8 @@ const SIDEBAR_WIDTH = '22%'
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 
 export class Dashboard {
-  constructor({api, catalog, context, refresh = 30, demo = false, screen, writeClipboard = clipboard.write}) {
-    Object.assign(this, {api, catalog, context, refresh, demo, writeClipboard})
+  constructor({api, catalog, context, resources = null, refresh = 30, demo = false, screen, writeClipboard = clipboard.write}) {
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, writeClipboard})
     this.screen = screen ?? blessed.screen({smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
     this.tab = 0
     this.mode = 'pipelines'
@@ -26,6 +26,9 @@ export class Dashboard {
     this.generation = 0
     this.navGeneration = 0
     this.config = null
+    this.resourceData = {}
+    this.resourceErrors = {}
+    this.resourceRequests = new Map()
     this.revealed = new Set()
     this.copying = false
     this.busy = false
@@ -107,7 +110,7 @@ export class Dashboard {
     key(['a'], () => this.setMode('apps'))
     key(['/'], () => void this.filterNav())
     key(['escape'], () => void this.back())
-    key(['R'], () => void this.reload())
+    key(['R', 'S-r'], () => void this.reload())
     key(['[', 'left', 'h'], () => this.changeTab((this.tab + TABS.length - 1) % TABS.length))
     key([']', 'right', 'l'], () => this.changeTab((this.tab + 1) % TABS.length))
     for (let i = 0; i < TABS.length; i++) key([String(i + 1)], () => this.changeTab(i))
@@ -243,6 +246,7 @@ export class Dashboard {
 
   clearApp() {
     this.generation++
+    this.resetResourceDetails()
     for (const key of ['app', 'pipeline', 'config']) this.loading.delete(key)
     this.syncLoadingAnimation()
     this.app = null
@@ -314,7 +318,7 @@ export class Dashboard {
     await this.loadApp()
   }
 
-  async loadApp(automatic = false) {
+  async loadApp(automatic = false, {forceResources = false} = {}) {
     if (!this.app || this.busy || this.closed) return false
     const generation = this.generation
     const app = this.app
@@ -328,11 +332,13 @@ export class Dashboard {
       this.pipeline = hierarchy.pipeline
       this.breadcrumbTeam = hierarchy.team
       Object.assign(data.errors, hierarchy.errors)
+      this.resetResourceDetails()
       this.data = data
       this.app = data.app
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
       this.messageTone = Object.keys(data.errors).length ? 'warning' : 'success'
       this.drawApp()
+      void this.loadResourceDetails({force: forceResources})
       return true
     } catch (error) {
       if (generation === this.generation) {
@@ -352,7 +358,52 @@ export class Dashboard {
     const {app, formation, errors} = this.data
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', `${this.data.addons.length} add-ons`, 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
     this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]} `)
-    this.setRows(appRows(TABS[this.tab], this.data, {config: this.config, configError: this.configError, revealed: this.revealed}), true)
+    this.setRows(appRows(TABS[this.tab], this.data, {
+      config: this.config, configError: this.configError, revealed: this.revealed,
+      resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
+    }), true)
+  }
+
+  resetResourceDetails() {
+    this.resourceData = {}
+    this.resourceErrors = {}
+    this.resourceRequests.clear()
+    for (const kind of ['dynos', 'addons']) this.loading.delete(`resources-${kind}`)
+    this.syncLoadingAnimation()
+  }
+
+  async loadResourceDetails({force = false} = {}) {
+    const kind = {Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]]
+    if (!kind || !this.resources?.available || !this.data || this.closed) return
+    if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.resourceRequests.has(kind))) return
+    const data = this.data
+    const generation = this.generation
+    const request = {}
+    this.resourceRequests.set(kind, request)
+    const current = () => !this.closed && generation === this.generation && this.data === data && this.resourceRequests.get(kind) === request
+    const finishLoading = this.beginLoading(`resources-${kind}`, `Loading ${kind === 'dynos' ? 'dyno costs and allocations' : 'add-on costs and limits'}…`)
+    try {
+      const result = await this.resources[kind](data, {force})
+      if (!current()) return
+      this.resourceData[kind] = result
+      delete this.resourceErrors[kind]
+    } catch (error) {
+      if (!current()) return
+      this.resourceErrors[kind] = errorMessage(error)
+    } finally {
+      if (current()) {
+        this.resourceRequests.delete(kind)
+        if ({Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]] === kind) {
+          // getScroll() includes Blessed's cursor offset; childBase is the
+          // actual first visible line that should survive this redraw.
+          const scroll = this.detail.childBase
+          this.drawApp()
+          this.detail.setScroll(scroll)
+          this.render()
+        }
+      }
+      finishLoading()
+    }
   }
 
   setRows(rows, preserve = false) {
@@ -386,6 +437,7 @@ export class Dashboard {
     this.main.select(0)
     this.drawApp()
     if (TABS[index] === 'Config' && !this.config) void this.loadConfig()
+    void this.loadResourceDetails()
   }
 
   async loadConfig() {
@@ -426,7 +478,7 @@ export class Dashboard {
     if (this.busy) return
     if (this.app) {
       this.revealed.clear()
-      await this.loadApp()
+      await this.loadApp(false, {forceResources: true})
       if (TABS[this.tab] === 'Config') await this.loadConfig()
     } else if (this.pipeline) await this.openPipeline(this.pipeline)
     else {

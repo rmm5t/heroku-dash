@@ -27,5 +27,5 @@ export function createDemo() {
   api.pipelineApps = async () => structuredClone(apps)
   api.appData = async id => data(apps.find(a => a.id === id || a.name === id))
   api.config = async () => ({NODE_ENV: 'production', EXAMPLE_SECRET: 'demo-only-value', WEB_CONCURRENCY: '2'})
-  return {api, catalog, context: {pipeline, reason: 'Offline demo'}}
+  return {api, catalog, resources: {available: false, message: 'Cost and limit lookup is disabled in the offline demo.'}, context: {pipeline, reason: 'Offline demo'}}
 }

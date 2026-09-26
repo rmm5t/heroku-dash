@@ -636,3 +636,69 @@ test('leaving an app clears its outstanding loading indicator', async t => {
   assert.equal(d.config, null)
   assert.equal(d.loadingTimer, null)
 })
+
+const costData = monthlyCost => ({formations: Object.fromEntries(['web', 'worker'].map(type => [type, {
+  ramPerDynoMb: 512, allocatedRamMb: 1024, cpuPerDyno: '1x shared', cpu: '2x shared', monthlyCost, unitMonthlyCost: 25,
+}])), instances: {}})
+
+test('cost enrichment is lazy, preserves selection and scroll, and refreshes with R', async t => {
+  const pending = Promise.withResolvers()
+  const calls = []
+  const resources = {available: true, version: '0.5.1',
+    async dynos(data, options) { calls.push(['dynos', data.app.id, options.force]); return calls.length === 1 ? pending.promise : costData(75) },
+    async addons() { calls.push(['addons']); return {byId: {postgres: {costCents: 500, costUnit: 'month'}}} },
+  }
+  const {dashboard: d, key} = await harness(t, {resources})
+  await key('\r')
+  assert.deepEqual(calls, [])
+  await key('2')
+  assert.equal(calls.length, 1)
+  assert.match(clean(d.status.content), /Loading dyno costs/)
+  await key('j')
+  d.detail.setContent(Array.from({length: 40}, (_, i) => `Detail ${i}`).join('\n'))
+  d.detail.setScroll(3)
+  pending.resolve(costData(50))
+  await delay(15)
+  assert.equal(d.main.selected, 1)
+  assert.equal(d.detail.childBase, 3)
+  assert.match(d.detail.content, /\$50\.00\/month/)
+  await key('3')
+  assert.match(d.detail.content, /\$5\.00\/month/)
+  await key('2')
+  assert.equal(calls.length, 2)
+  await key('R')
+  assert.equal(calls.length, 3)
+  assert.equal(calls.at(-1)[2], true)
+  assert.match(d.detail.content, /\$75\.00\/month/)
+})
+
+test('failed optional cost lookup does not block the app and can be retried', async t => {
+  const resources = {available: true, version: '0.5.1', async dynos() { throw new Error('Cost API unavailable') }}
+  const {dashboard: d, key} = await harness(t, {resources})
+  await key('\r')
+  await key('2')
+  assert.equal(d.rows[0].kind, 'formation')
+  assert.match(d.detail.content, /Cost API unavailable/)
+  assert.equal(d.loadingTimer, null)
+  resources.dynos = async () => costData(50)
+  await key('R')
+  assert.match(d.detail.content, /\$50\.00\/month/)
+  assert.equal(d.resourceErrors.dynos, undefined)
+})
+
+test('late cost data from another app cannot overwrite the current resource details', async t => {
+  const pending = Promise.withResolvers()
+  const resources = {available: true, version: '0.5.1',
+    async dynos(data) { return data.app.id === 'app-staging' ? pending.promise : costData(100) },
+  }
+  const {dashboard: d, key} = await harness(t, {resources})
+  await key('\r')
+  await key('2')
+  await d.openApp(d.catalog.apps[1])
+  await key('2')
+  assert.match(d.detail.content, /\$100\.00\/month/)
+  pending.resolve(costData(50))
+  await delay(15)
+  assert.equal(d.resourceData.dynos.formations.web.monthlyCost, 100)
+  assert.match(d.detail.content, /\$100\.00\/month/)
+})

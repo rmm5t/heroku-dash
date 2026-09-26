@@ -77,8 +77,8 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | View | What you can do |
 | --- | --- |
 | **1 Overview** | Inspect app identity, team, region, stack, URLs, formation, and latest release |
-| **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale quantity and size |
-| **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments |
+| **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale quantity and size; optionally view costs and CPU/RAM allocations |
+| **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments; optionally view billed costs and capacity limits |
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Inspect domains, ACM state, buildpacks, region, stack, and space; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, including status, author, description, and timestamp |
@@ -127,6 +127,25 @@ Config values are fetched only when opening Config. Press `v` to reveal or hide 
 Press **`y`** to copy the selected variable's value without revealing it. Revealed values appear in **cyan** in the Details pane; **click the highlighted value** to copy it. Clicking any wrapped or multiline portion copies the complete value. Empty values show a clickable `(empty value)` placeholder. Copying preserves whitespace, Unicode, and multiline content, and works in `--read-only` mode. The status bar confirms the variable name without displaying its value.
 
 Clipboard access uses the system clipboard on the machine running `dash` (macOS, Windows, or a Linux desktop). On Wayland, install `wl-clipboard`; X11 uses `xsel`, with a bundled fallback. A desktop clipboard must be accessible to the terminal; headless/SSH sessions without one show a copy error instead.
+
+## Optional costs and limits with heroku-resources
+
+Install [heroku-resources](https://github.com/rmm5t/heroku-resources) alongside dash, then restart the dashboard:
+
+```sh
+heroku plugins:install heroku-resources
+heroku dash
+```
+
+Dash detects the installed plugin automatically, including a locally linked checkout. It reuses the pricing, dyno specification, add-on limit, and pending-plan-change helpers from **heroku-resources 0.5.1**. The integration is optional: if the plugin is absent or its helpers are incompatible, the details pane explains why enrichment is unavailable.
+
+- **Resources details:** RAM per dyno, total allocated RAM for a process, CPU allocation, estimated monthly process cost, and the per-dyno size rate. Scaled-to-zero processes are included. One-off dynos show a full-month size rate, not a claim about their actual charge.
+- **Add-ons details:** billed price and billing app, active/billed plans, provider status, connection limit, RAM allocation, and disk capacity where supported. Postgres and Key-Value Store limits come from the companion plugin's service lookups; other services may have a price but no available limits.
+- **Billing semantics:** prices are USD estimates, not invoices. Eco uses the shared account-level $5/month plan. Contract and metered prices are identified explicitly. Shared attachments identify their billing app. During plan changes, limits describe the active allocation while price reflects the billed plan.
+
+Enrichment loads when you open **Resources** or **Add-ons**, using the current Heroku account and GET requests only, including in `--read-only` mode. It works for apps outside pipelines too. Direct helper reuse avoids fetching an entire pipeline stage via `heroku resources --json`.
+
+Switching between views reuses the current app's fetched details. App refreshes refresh enrichment for the active resource view; dyno-size metadata is cached for five minutes. Press **`R`** to refresh immediately, including the size cache. Individual unavailable add-ons or limits don't block the rest of the dashboard. The offline demo does not perform these lookups.
 
 ## Metrics and current scope
 
@@ -198,15 +217,26 @@ npm run test:live -- ~/work/hermod ~/work/heimdall
 
 The live-check transport **rejects every method except GET**. It verifies repository-to-pipeline resolution and renders all seven app views, printing counts rather than config values. It reads every app in the detected pipelines.
 
+To verify cost/limit enrichment with the installed `heroku-resources` plugin against specific apps:
+
+```sh
+npm run test:resources -- hermod-staging heimdall-staging
+```
+
+This check also enforces GET-only access, including calls to Heroku's Postgres and Key-Value Store service APIs. It prints resource counts, without fetching config vars.
+
 After linking the plugin, macOS/Linux users with Python 3 can exercise the actual CLI in a pseudo-terminal:
 
 ```sh
 python3 scripts/terminal-check.py
 python3 scripts/terminal-check.py --repo ~/work/hermod
 python3 scripts/terminal-check.py --repo ~/work/heimdall
+python3 scripts/terminal-check.py --repo ~/work/heimdall --resources
 ```
 
 Without `--repo`, this uses the offline demo. Live terminal checks always pass `--read-only --refresh 0`; mutation behavior is tested only with mocked APIs.
+
+`--resources` also checks Resources/Add-ons cost details in the actual terminal UI; use a pipeline whose first app has dynos and add-ons, with `heroku-resources` installed.
 
 ### Layout
 
@@ -215,8 +245,10 @@ src/commands/dash.js   Command flags, authentication, startup
 src/project.js         Git context and pipeline resolution
 src/hierarchy.js       Team and pipeline parents for resource breadcrumbs
 src/api.js             Platform API reads, pagination, guarded writes
+src/resources.js       Optional adapter to the installed heroku-resources plugin
 src/ui/dashboard.js    Terminal navigation, prompts, refresh, lifecycle
 src/ui/views.js        View models, config masking, operational metrics
+src/ui/resource-details.js  Cost and capacity details and billing annotations
 src/ui/details.js      Highlighted values and scroll-aware click targets
 src/ui/theme.js        Nerd Font icons, semantic colors, styled labels
 src/ui/text.js         Terminal-safe text sanitization
