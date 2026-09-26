@@ -4,18 +4,18 @@ A keyboard-driven Heroku dashboard in your terminal, inspired by **gh-dash**.
 
 Run **`heroku dash`** inside a Git repository to open its Heroku pipeline. Browse teams, pipelines, and apps; inspect resources and settings; scale dynos; and manage config without leaving your terminal.
 
-## Install from this checkout
+## Installation
 
 Requires a current [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli), Node.js 22+, and an interactive terminal. The minimum terminal size is 80 × 24; 120 × 36 or larger is recommended.
 
 For the dashboard's icons, select a **[Nerd Font](https://www.nerdfonts.com/)** in your terminal settings. A **Nerd Font Mono** variant, such as **JetBrainsMono Nerd Font Mono** or **FiraCode Nerd Font Mono**, keeps icons aligned to the terminal grid. Missing or boxed icons usually mean the terminal is using an unpatched font.
 
 ```sh
-npm ci
-npm run build
-heroku plugins:link .
+heroku plugins:install heroku-dash
 heroku dash
 ```
+
+The plugin is installed from [npm](https://www.npmjs.com/package/heroku-dash) directly through the Heroku CLI.
 
 Authentication uses your existing Heroku CLI login, including `HEROKU_API_KEY` when set. Run `heroku login` first if needed.
 
@@ -25,10 +25,16 @@ Try the offline demo without making any Heroku requests:
 heroku dash --demo
 ```
 
-To unlink the development plugin:
+Update installed Heroku plugins:
 
 ```sh
-heroku plugins:unlink heroku-dash
+heroku plugins:update
+```
+
+Uninstall this plugin:
+
+```sh
+heroku plugins:uninstall heroku-dash
 ```
 
 ## Usage
@@ -134,12 +140,53 @@ Add-on provisioning/plan changes, pipeline promotions, log streaming, domain/bui
 
 Plain JavaScript ESM, an oclif/Heroku command, and Blessed terminal widgets. No application compilation step is required; `npm run build` generates the oclif command manifest.
 
+### Local development
+
+From a checkout of this repository:
+
+```sh
+npm ci
+npm run build
+heroku plugins:link .
+heroku dash --demo
+```
+
+To switch from a development link to the npm release:
+
+```sh
+heroku plugins:unlink heroku-dash
+heroku plugins:install heroku-dash
+```
+
+### Checks
+
 ```sh
 npm run check             # Lint, automated tests, command manifest
 npm pack --dry-run        # Inspect the publishable package
 ```
 
 Tests use mocked transports and in-memory terminal streams. They cover repository resolution, pagination, partial API failures, read-only guards, confirmation validation, all three mutation paths, config masking, keyboard navigation, stale-response handling, and terminal cleanup.
+
+### Publishing to npm
+
+Run these commands from the repository root with Node.js 22+:
+
+```sh
+npm ci
+npm publish --dry-run       # Run checks and inspect the package without uploading
+npm login                  # Sign in to the npm account publishing the package
+npm publish
+```
+
+`npm publish` runs lint and tests through `prepublishOnly`, then generates the command manifest through `prepack`. The package includes the runtime source, `oclif.manifest.json`, README, and MIT license. Development dependencies are needed to publish, but aren't required when installing the published plugin. Package access is explicitly public.
+
+The initial release is **`heroku-dash@0.1.0`**. For subsequent releases, increment the version before publishing, for example:
+
+```sh
+npm version patch --no-git-tag-version
+```
+
+This updates `package.json` and `package-lock.json`; npm does not allow publishing the same package version twice.
 
 ### Explicit read-only integration checks
 

@@ -2,19 +2,25 @@
   "name": "heroku-dash",
   "version": "0.1.0",
   "description": "A keyboard-driven terminal dashboard for Heroku",
+  "author": "Ryan McGeary <ryan@mcgeary.org>",
+  "homepage": "https://github.com/rmm5t/heroku-dash",
+  "bugs": {"url": "https://github.com/rmm5t/heroku-dash/issues"},
+  "repository": {"type": "git", "url": "git+https://github.com/rmm5t/heroku-dash.git"},
   "license": "MIT",
   "type": "module",
   "engines": {"node": ">=22"},
   "files": ["src", "oclif.manifest.json", "README.md", "LICENSE"],
   "keywords": ["heroku", "heroku-cli-plugin", "oclif", "tui", "dashboard"],
   "oclif": {"bin": "heroku", "commands": "./src/commands"},
+  "publishConfig": {"access": "public"},
   "scripts": {
     "build": "oclif manifest",
     "lint": "eslint src test scripts",
     "test": "node --test",
     "check": "npm run lint && npm test && npm run build",
     "test:live": "node scripts/live-check.js",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run lint && npm test"
   },
   "dependencies": {
     "@heroku-cli/command": "^13.2.2",
