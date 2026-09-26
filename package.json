@@ -1,0 +1,30 @@
+{
+  "name": "heroku-dash",
+  "version": "0.1.0",
+  "description": "A keyboard-driven terminal dashboard for Heroku",
+  "license": "MIT",
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "files": ["src", "oclif.manifest.json", "README.md", "LICENSE"],
+  "keywords": ["heroku", "heroku-cli-plugin", "oclif", "tui", "dashboard"],
+  "oclif": {"bin": "heroku", "commands": "./src/commands"},
+  "scripts": {
+    "build": "oclif manifest",
+    "lint": "eslint src test scripts",
+    "test": "node --test",
+    "check": "npm run lint && npm test && npm run build",
+    "test:live": "node scripts/live-check.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@heroku-cli/command": "^13.2.2",
+    "@oclif/core": "^4.13.2",
+    "blessed": "^0.1.81"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.39.2",
+    "globals": "^16.5.0",
+    "oclif": "^4.23.29"
+  }
+}

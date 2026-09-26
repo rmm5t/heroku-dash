@@ -1,0 +1,188 @@
+import assert from 'node:assert/strict'
+import {PassThrough, Writable} from 'node:stream'
+import {setTimeout as delay} from 'node:timers/promises'
+import test from 'node:test'
+import blessed from 'blessed'
+import {createDemo} from '../src/demo.js'
+import {Dashboard} from '../src/ui/dashboard.js'
+
+async function harness(t, override = {}) {
+  const input = new PassThrough()
+  input.isTTY = true
+  input.setRawMode = () => {}
+  const output = new Writable({write(_chunk, _encoding, callback) { callback() }})
+  Object.assign(output, {isTTY: true, columns: 140, rows: 45})
+  const screen = blessed.screen({input, output, terminal: 'xterm-256color', fullUnicode: true, smartCSR: false})
+  const demo = createDemo()
+  const dashboard = new Dashboard({...demo, ...override, screen, refresh: 0})
+  t.after(() => { dashboard.close(); input.destroy(); output.destroy() })
+  await dashboard.start()
+  return {dashboard, screen, input, async key(value) { input.write(value); await delay(15) }}
+}
+
+test('keyboard opens pipeline apps and switches all app views', async t => {
+  const {dashboard: d, key} = await harness(t)
+  assert.equal(d.rows[0].kind, 'app')
+  await key('\r')
+  assert.equal(d.app.name, 'constellation-staging')
+  for (let tab = 1; tab <= 7; tab++) {
+    await key(String(tab))
+    assert.equal(d.tab, tab - 1)
+    assert.ok(d.rows.length)
+  }
+  await key('\x1b')
+  await delay(50)
+  assert.equal(d.app, null)
+  assert.equal(d.rows[0].kind, 'app')
+})
+
+test('config reveal is scoped to selection and hidden on changing views', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('\r')
+  await key('4')
+  assert.equal(d.config.EXAMPLE_SECRET, 'demo-only-value')
+  assert.ok(!d.detail.content.includes('demo-only-value'))
+  await key('v')
+  assert.equal(d.revealed, 'EXAMPLE_SECRET')
+  assert.ok(d.detail.content.includes('demo-only-value'))
+  await key('j')
+  assert.equal(d.revealed, null)
+  assert.ok(!d.main.content.includes('demo-only-value'))
+  await key('1')
+  await key('4')
+  assert.equal(d.revealed, null)
+})
+
+test('filter input receives shortcut letters without changing navigation', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('/')
+  assert.ok(d.modal)
+  await key('constellation')
+  assert.equal(d.mode, 'pipelines')
+  assert.equal(d.closed, false)
+  await key('\r')
+  assert.equal(d.modal, null)
+  assert.equal(d.filter, 'constellation')
+  assert.equal(d.navItems.length, 1)
+})
+
+test('read-only action keys do not open mutation prompts', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('\r')
+  await key('2')
+  await key('s')
+  assert.equal(d.modal, undefined)
+  assert.match(d.message, /Read-only/)
+})
+
+test('scale cancellation and mismatched confirmation never call the API', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  let writes = 0
+  demo.api.scale = async () => { writes++ }
+  const {dashboard: d, key} = await harness(t, demo)
+  await key('\r')
+  await key('2')
+  await key('s')
+  await key('\x1b')
+  await delay(50)
+  assert.equal(writes, 0)
+  assert.equal(d.modal, null)
+  await key('s')
+  await key('\x15') // Ctrl-U clears the pre-filled quantity.
+  await key('0')
+  await key('\r')
+  await key('\r') // Keep size.
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /2 × Standard-1X → 0 × Standard-1X/)
+  await key('wrong-app')
+  await key('\r')
+  assert.equal(writes, 0)
+  assert.match(d.message, /did not match/)
+})
+
+test('confirmed scaling sends exact app, process, count, and size to mocked API', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const writes = []
+  demo.api.scale = async (...args) => { writes.push(args) }
+  const {key} = await harness(t, demo)
+  await key('\r')
+  await key('2')
+  await key('s')
+  await key('\x15')
+  await key('3')
+  await key('\r')
+  await key('\r')
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [['constellation-staging', 'web', 3, 'Standard-1X', 'constellation-staging']])
+})
+
+test('slow app response cannot overwrite a newer selection', async t => {
+  const {dashboard: d} = await harness(t)
+  const original = d.api.appData
+  let finish
+  d.api.appData = async id => {
+    if (id === 'app-staging') await new Promise(resolve => { finish = resolve })
+    return original(id)
+  }
+  const first = d.openApp(d.catalog.apps[0])
+  await d.openApp(d.catalog.apps[1])
+  finish()
+  await first
+  assert.equal(d.app.name, 'constellation-production')
+  assert.equal(d.data.app.name, 'constellation-production')
+})
+
+test('config editing masks typed secrets and requires app-name confirmation', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const writes = []
+  demo.api.setConfig = async (...args) => { writes.push(args) }
+  const {dashboard: d, screen, key} = await harness(t, demo)
+  await key('\r')
+  await key('4')
+  await key('n')
+  await key('NEW_SECRET')
+  await key('\r')
+  await key('never-display-this')
+  const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  assert.ok(!visible.includes('never-display-this'))
+  await key('\r')
+  assert.equal(writes.length, 0)
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [['constellation-staging', 'NEW_SECRET', 'never-display-this', 'constellation-staging']])
+  assert.equal(d.modal, null)
+})
+
+test('config deletion and maintenance toggle target the confirmed app', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const writes = []
+  demo.api.setConfig = async (...args) => { writes.push(['config', ...args]) }
+  demo.api.maintenance = async (...args) => { writes.push(['maintenance', ...args]) }
+  const {key} = await harness(t, demo)
+  await key('\r')
+  await key('4')
+  await key('d')
+  await key('constellation-staging')
+  await key('\r')
+  await key('5')
+  await key('m')
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [
+    ['config', 'constellation-staging', 'EXAMPLE_SECRET', null, 'constellation-staging'],
+    ['maintenance', 'constellation-staging', true, 'constellation-staging'],
+  ])
+})
+
+test('Ctrl-C exits while a textbox has captured terminal input', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('/')
+  assert.ok(d.modal)
+  await key('\x03')
+  assert.equal(d.closed, true)
+  assert.equal(d.screen.destroyed, true)
+})
