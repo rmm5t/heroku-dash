@@ -25,6 +25,18 @@ test('all views render demo data and errors without exposing config inadvertentl
   assert.match(JSON.stringify(appRows('Metrics', data)), /unavailable/)
 })
 
+test('metrics columns show unavailable dyno counts as unknown rather than zero', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  data.dynos = []
+  data.errors.dynos = 'Permission denied'
+  const metrics = appRows('Metrics', data)
+  assert.deepEqual(metrics.find(row => row.columns[0] === 'Dyno health').columns, ['Dyno health', '—', '—', 'Unavailable'])
+  const web = metrics.find(row => row.columns[0] === 'web')
+  assert.deepEqual(web.columns, ['web', 2, '—', 'Unavailable'])
+  assert.match(web.detail, /Permission denied/)
+})
+
 test('operational metrics exclude one-off dynos from desired formation health', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)

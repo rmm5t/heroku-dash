@@ -1,6 +1,7 @@
 import {clean, single} from './text.js'
 import {stateStyle} from './theme.js'
 import {addonDetails, dynoDetails} from './resource-details.js'
+import {TABLE_COLUMNS} from './columns.js'
 
 export {clean, single} from './text.js'
 export function age(date, now = Date.now()) {
@@ -34,10 +35,11 @@ export function operationalMetrics(data) {
 export function appRows(tab, data, {config, configError, revealed = new Set(), resources} = {}) {
   const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
   const rows = []
+  const noticeColumns = (label, status) => TABLE_COLUMNS[tab]?.map((column, index) => index === 0 ? label : /^(State|Status)/.test(column.label) ? status : '—')
   const error = section => {
     if (errors[section]) rows.push(row(`${section} unavailable`, errors[section], {
-      icon: 'error', tone: 'error', emphasis: 'unavailable',
-      ...(tab === 'Overview' ? {columns: [section, 'unavailable', '—', 'Error']} : {}),
+      icon: 'error', tone: 'error', emphasis: 'Unavailable',
+      columns: noticeColumns(section, 'Unavailable'),
     }))
   }
   if (tab === 'Overview') {
@@ -64,24 +66,30 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
     for (const f of formation) rows.push(row(`${f.type.padEnd(16)} ${String(f.quantity).padStart(3)} × ${f.size}    [s] scale`, lines([
       ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
       ['Updated', f.updated_at], ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
-    ]) + dynoDetails(resources, 'formations', f.type), {kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type}))
+    ]) + dynoDetails(resources, 'formations', f.type), {kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type,
+      columns: [f.type, f.size, f.quantity, '[s] scale', '—']}))
     for (const d of dynos) rows.push(row(`  ${d.name.padEnd(20)} ${d.state.padEnd(10)} ${d.size}  ·  ${age(d.created_at)}`, lines([
       ['Dyno', d.name], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
-      ['Created', d.created_at], ['Command', d.command],
-    ]) + dynoDetails(resources, 'instances', d.name), {...stateStyle(d.state), emphasis: d.state}))
+      ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command],
+    ]) + dynoDetails(resources, 'instances', d.name), {...stateStyle(d.state), emphasis: d.state,
+      columns: [d.name, d.size, '—', d.state, age(d.created_at)]}))
   }
   if (tab === 'Add-ons') {
     error('addons'); error('attachments')
     const all = new Map(addons.map(addon => [addon.id, addon]))
     for (const attachment of attachments) if (!all.has(attachment.addon.id)) all.set(attachment.addon.id, attachment.addon)
     for (const addon of all.values()) {
-      const state = resources?.data?.addons?.byId?.[addon.id]?.state ?? addon.state
+      const enriched = resources?.data?.addons?.byId?.[addon.id]
+      const state = enriched?.state ?? addon.state
+      const service = addon.addon_service?.human_name ?? enriched?.service ?? addon.addon_service?.name ?? '—'
+      const plan = enriched?.plan ?? addon.plan?.human_name ?? addon.plan?.name?.replace(/^[^:]+:/, '')
       rows.push(row(`${addon.name}  ·  ${addon.plan?.name ?? 'shared attachment'}  ·  ${state ?? '—'}`, lines([
-        ['Name', addon.name], ['Service', addon.addon_service?.name], ['Plan', addon.plan?.name],
+        ['Name', addon.name], ['Service', addon.addon_service?.name ?? enriched?.service], ['Plan', addon.plan?.name ?? enriched?.plan],
         ['State', state], ['Billing app', addon.app?.name], ['Created', addon.created_at],
         ['Attachments', attachments.filter(a => a.addon.id === addon.id).map(a => a.name).join(', ') || '—'],
         ['Config keys', addon.config_vars?.join(', ')], ['ID', addon.id],
-      ]) + addonDetails(resources, addon.id), {...stateStyle(state), icon: /postgres|redis|mysql|mongo|key-value/i.test(addon.addon_service?.name ?? addon.plan?.name ?? '') ? 'database' : 'addons', emphasis: state}))
+      ]) + addonDetails(resources, addon.id), {...stateStyle(state), icon: /postgres|redis|mysql|mongo|key-value/i.test(addon.addon_service?.name ?? addon.plan?.name ?? '') ? 'database' : 'addons', emphasis: state,
+        columns: [addon.name, service, plan, state]}))
     }
   }
   if (tab === 'Config') {
@@ -99,17 +107,20 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
     }
   }
   if (tab === 'Settings') {
-    rows.push(row(`Maintenance mode: ${app.maintenance ? 'ON' : 'OFF'}    [m] toggle`, 'Press m to toggle maintenance mode. This changes how the app serves requests.', {icon: 'settings', tone: app.maintenance ? 'warning' : 'success', emphasis: app.maintenance ? 'ON' : 'OFF'}))
+    rows.push(row(`Maintenance mode: ${app.maintenance ? 'ON' : 'OFF'}    [m] toggle`, 'Press m to toggle maintenance mode. This changes how the app serves requests.', {icon: 'settings', tone: app.maintenance ? 'warning' : 'success', emphasis: app.maintenance ? 'ON' : 'OFF',
+      columns: ['Maintenance', app.maintenance ? 'ON' : 'OFF', '[m] toggle']}))
     rows.push(row(`Region: ${app.region?.name}  ·  Stack: ${app.stack?.name}`, lines([
       ['Region', app.region?.name], ['Stack', app.stack?.name], ['Build stack', app.build_stack?.name],
       ['Space', app.space?.name ?? 'Common Runtime'], ['ACM', app.acm ? 'Enabled' : 'Disabled'],
-    ]), {icon: 'globe', tone: 'info'}))
+    ]), {icon: 'globe', tone: 'info', columns: ['Region / stack', `${app.region?.name ?? '—'} / ${app.stack?.name ?? '—'}`, '—']}))
     error('domains'); error('buildpacks')
     for (const domain of domains) rows.push(row(`Domain  ${domain.hostname}`, lines([
       ['Hostname', domain.hostname], ['Kind', domain.kind], ['CNAME', domain.cname],
       ['Status', domain.status], ['ACM status', domain.acm_status], ['ACM reason', domain.acm_status_reason],
-    ]), {icon: 'globe', tone: 'info'}))
-    for (const item of buildpacks) rows.push(row(`Buildpack  ${item.ordinal}. ${item.buildpack?.name ?? item.buildpack?.url}`, item.buildpack?.url, {icon: 'code', tone: 'accent'}))
+    ]), {icon: 'globe', tone: 'info', columns: ['Domain', domain.hostname, domain.status]}))
+    for (const item of buildpacks) rows.push(row(`Buildpack  ${item.ordinal}. ${item.buildpack?.name ?? item.buildpack?.url}`, lines([
+      ['Buildpack', item.buildpack?.name], ['Order', item.ordinal], ['URL', item.buildpack?.url],
+    ]), {icon: 'code', tone: 'accent', columns: [`Buildpack ${item.ordinal}`, item.buildpack?.name ?? item.buildpack?.url, '—']}))
   }
   if (tab === 'Releases') {
     error('releases')
@@ -125,17 +136,27 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
     rows.push(row(`Dyno health    ${available ? `${m.healthy} / ${m.desired} configured dynos up or idle` : 'unavailable'}`, available
       ? `${m.healthy} up / idle   ${m.starting} starting   ${m.crashed} crashed\n${m.total} total dynos, including one-off processes.\n\nBased on current dyno states, not historical availability.\nEco dynos in the idle state are counted as healthy.\nDuring a deploy, overlapping dynos can exceed the desired count.`
       : 'Dyno health cannot be computed because formation or dyno data is unavailable.',
-    {icon: 'metrics', tone: !available ? 'muted' : m.crashed ? 'error' : m.healthy < m.desired ? 'warning' : 'success', emphasis: 'Dyno health'}))
+    {icon: 'metrics', tone: !available ? 'muted' : m.crashed ? 'error' : m.healthy < m.desired ? 'warning' : 'success', emphasis: 'Dyno health',
+      columns: ['Dyno health', available ? m.desired : '—', available ? m.healthy : '—', available ? 'Up / idle' : 'Unavailable']}))
     for (const f of formation) {
       const members = dynos.filter(d => d.type === f.type)
       const running = members.filter(d => ['up', 'idle'].includes(d.state)).length
-      rows.push(row(`${f.type}  ·  desired ${f.quantity}  ·  running ${running}`, members.map(d => `${d.name.padEnd(22)} ${d.state.padEnd(10)} age ${age(d.created_at)}`).join('\n') || 'No dynos currently running.',
-        {icon: 'resources', tone: errors.dynos ? 'muted' : members.some(d => d.state === 'crashed') ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: `running ${running}`}))
+      const crashed = members.some(d => d.state === 'crashed')
+      const status = errors.dynos ? 'Unavailable' : crashed ? 'Crashed' : running < f.quantity ? 'Below target' : !f.quantity && !running ? 'Scaled to 0' : 'Up / idle'
+      const detail = lines([['Process', f.type], ['Desired', f.quantity], ['Running', errors.dynos ? 'Unavailable' : running]])
+        + '\n\n' + (errors.dynos ? `Dyno data unavailable: ${errors.dynos}` : members.map(d => `${d.name.padEnd(22)} ${d.state.padEnd(10)} age ${age(d.created_at)}`).join('\n') || 'No dynos currently running.')
+      rows.push(row(`${f.type}  ·  desired ${f.quantity}  ·  running ${running}`, detail,
+        {icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
+          columns: [f.type, f.quantity, errors.dynos ? '—' : running, status]}))
     }
     if (!errors.releases) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,
-      `Latest ${releases.length} releases (up to 20).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info'}))
-    rows.push(row('Telemetry availability', 'CPU, memory, throughput, and latency charts are not exposed by the public Heroku Platform API.\n\nThis view shows live operational snapshots, not APM time-series metrics.\nPress o to open the app’s metrics page in the web dashboard.', {icon: 'overview', tone: 'muted'}))
-    rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, 'Press R to refresh. Automatic refresh follows --refresh (default: 30 seconds).', {icon: 'clock', tone: 'muted'}))
+      `Latest ${releases.length} releases (up to 20).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
+        columns: ['Releases OK', releases.length, releases.filter(r => r.status === 'succeeded').length, !releases.length ? 'No releases' : releases.some(r => r.status === 'failed') ? `${releases.filter(r => r.status === 'failed').length} failed` : 'Succeeded']}))
+    rows.push(row('Telemetry availability', 'CPU, memory, throughput, and latency charts are not exposed by the public Heroku Platform API.\n\nThis view shows live operational snapshots, not APM time-series metrics.\nPress o to open the app’s metrics page in the web dashboard.', {icon: 'overview', tone: 'muted', columns: ['Telemetry', '—', '—', 'Web only']}))
+    rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, `Snapshot: ${data.fetchedAt}\n\nPress R to refresh. Automatic refresh follows --refresh (default: 30 seconds).`, {icon: 'clock', tone: 'muted',
+      columns: ['Snapshot', '—', new Date(data.fetchedAt).toLocaleTimeString(), 'Fetched']}))
   }
-  return rows.length ? rows : [row('No items', `No ${tab.toLowerCase()} to display.`, {icon: 'search', tone: 'muted'})]
+  const result = rows.length ? rows : [row('No items', `No ${tab.toLowerCase()} to display.`, {icon: 'search', tone: 'muted', columns: noticeColumns('No items', 'Empty')})]
+  for (const item of result) if (item.columns) item.columnLayout = tab
+  return result
 }

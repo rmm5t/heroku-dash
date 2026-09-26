@@ -5,7 +5,7 @@ import {errorMessage} from '../api.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
-import {OVERVIEW_COLUMNS, overviewColumns} from './columns.js'
+import {tableColumns} from './columns.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, tabIcons} from './theme.js'
 
 const SIDEBAR_WIDTH = '22%'
@@ -432,14 +432,14 @@ export class Dashboard {
   }
 
   layoutColumns() {
-    const columnar = this.rows.some(row => row.columns)
+    const columnar = this.rows.find(row => row.columns)
     this.main.padding.top = columnar ? 1 : 0
     // Keep the border label above the new header padding (Blessed normally
     // repositions labels only after scrolling or resizing).
     if (this.main._label) this.main._label.rtop = this.main.childBase - this.main.itop
     if (!columnar) { this.columnHeader.hide(); return }
     const width = this.main.width - this.main.iwidth - 1
-    this.columnHeader.setContent(`    ${overviewColumns(OVERVIEW_COLUMNS, width - 4)}`)
+    this.columnHeader.setContent(`    ${tableColumns(null, width - 4, columnar.columnLayout)}`)
     this.columnHeader.show()
     this.columnHeader.setFront()
     // Reflow on resize without rebuilding the list or changing its selection.
