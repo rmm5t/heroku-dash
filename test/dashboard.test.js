@@ -54,6 +54,76 @@ test('config reveal is scoped to selection and hidden on changing views', async 
   assert.equal(d.revealed, null)
 })
 
+test('y copies exact config values while masked, revealed, or empty in read-only mode', async t => {
+  const copies = []
+  const {dashboard: d, screen, key} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  const value = `  secret-first-line\nUnicode: café 🔑\n${'long-value '.repeat(40)}\x1b[31m\n`
+  d.api.config = async () => ({MULTILINE: value, ZEMPTY: ''})
+  await key('\r')
+  await key('4')
+  assert.equal(d.api.readOnly, true)
+  await key('y')
+  assert.deepEqual(copies, [value])
+  assert.equal(d.revealed, null)
+  assert.equal(d.message, 'Copied MULTILINE to clipboard.')
+  const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  assert.ok(!visible.includes('secret-first-line'))
+  await key('v')
+  await key('y')
+  assert.equal(d.revealed, 'MULTILINE')
+  await key('j')
+  await key('y')
+  assert.deepEqual(copies, [value, value, ''])
+  assert.equal(d.message, 'Copied ZEMPTY to clipboard.')
+})
+
+test('y only copies an available config row and remains text inside prompts', async t => {
+  const {dashboard: d, key} = await harness(t, {writeClipboard: async () => assert.fail('No config value should be copied')})
+  await key('y') // Pipeline overview.
+  await key('\r')
+  await key('y') // App overview.
+  d.api.config = async () => ({})
+  await key('4')
+  await key('y') // Empty config list.
+  await key('/')
+  await key('y')
+  await key('\r')
+  assert.equal(d.filter, 'y')
+})
+
+test('clipboard errors do not expose config values or leave the UI busy', async t => {
+  const {dashboard: d, screen, key} = await harness(t, {writeClipboard: async value => { throw new Error(`Backend failed with stdin: ${value}`) }})
+  await key('\r')
+  await key('4')
+  await key('y')
+  assert.equal(d.messageTone, 'error')
+  assert.match(d.message, /Could not copy value/)
+  assert.equal(d.copying, false)
+  assert.equal(d.revealed, null)
+  assert.ok(!d.message.includes('demo-only-value'))
+  const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  assert.ok(!visible.includes('demo-only-value'))
+  await key('1')
+  assert.equal(d.tab, 0)
+})
+
+test('pending copies ignore repeats and do not overwrite status after changing apps', async t => {
+  const pending = Promise.withResolvers()
+  let copies = 0
+  const {dashboard: d, key} = await harness(t, {writeClipboard: () => { copies++; return pending.promise }})
+  await key('\r')
+  await key('4')
+  const copying = d.copyConfig()
+  await key('y')
+  assert.equal(copies, 1)
+  await d.openApp(d.catalog.apps[1])
+  const message = d.message
+  pending.resolve()
+  await copying
+  assert.equal(d.message, message)
+  assert.equal(d.copying, false)
+})
+
 test('h/l wrap through views in every pane without opening selected items', async t => {
   const {dashboard: d, key} = await harness(t)
   await key('l')

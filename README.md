@@ -71,7 +71,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **1 Overview** | Inspect app identity, team, region, stack, URLs, formation, and latest release |
 | **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale quantity and size |
 | **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments |
-| **4 Config** | View config keys; reveal a selected value; create, replace, or delete variables |
+| **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Inspect domains, ACM state, buildpacks, region, stack, and space; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, including status, author, description, and timestamp |
 | **7 Metrics** | View current dyno health, desired/running counts by process, crashed/starting counts, dyno ages, and recent deployment outcomes |
@@ -100,6 +100,7 @@ App actions:
 | --- | --- | --- |
 | `s` | Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and dyno size |
 | `v` | Config | Reveal / hide the selected value |
+| `y` | Config | Copy the selected variable's full value to the clipboard, even when masked |
 | `e` | Config | Replace the selected variable's value |
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
 | `d` | Config | Delete the selected variable |
@@ -114,6 +115,10 @@ Every write displays the target app and proposed change, then requires typing th
 `--read-only` blocks all non-GET requests at the plugin's API boundary, in addition to disabling mutation prompts. The offline demo also runs read-only.
 
 Config values are fetched only when opening Config. They stay masked until you press `v`; moving to another config row, switching views/apps, or manually refreshing hides them again. The plugin keeps fetched values in memory for the selected app and does not write config values to disk. Automatic refresh updates operational app data; use `R` to refresh config values.
+
+Press **`y`** to copy the selected variable's value without revealing it. Copying preserves the complete value, including whitespace, Unicode, and multiline content, and works in `--read-only` mode. The status bar confirms the variable name without displaying its value.
+
+Clipboard access uses the system clipboard on the machine running `dash` (macOS, Windows, or a Linux desktop). On Wayland, install `wl-clipboard`; X11 uses `xsel`, with a bundled fallback. A desktop clipboard must be accessible to the terminal; headless/SSH sessions without one show a copy error instead.
 
 ## Metrics and current scope
 

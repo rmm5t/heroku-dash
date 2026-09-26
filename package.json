@@ -19,7 +19,8 @@
   "dependencies": {
     "@heroku-cli/command": "^13.2.2",
     "@oclif/core": "^4.13.2",
-    "blessed": "^0.1.81"
+    "blessed": "^0.1.81",
+    "clipboardy": "^5.3.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

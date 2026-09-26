@@ -1,4 +1,5 @@
 import blessed from 'blessed'
+import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import {errorMessage} from '../api.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
@@ -7,8 +8,8 @@ import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, 
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 
 export class Dashboard {
-  constructor({api, catalog, context, refresh = 30, demo = false, screen}) {
-    Object.assign(this, {api, catalog, context, refresh, demo})
+  constructor({api, catalog, context, refresh = 30, demo = false, screen, writeClipboard = clipboard.write}) {
+    Object.assign(this, {api, catalog, context, refresh, demo, writeClipboard})
     this.screen = screen ?? blessed.screen({smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
     this.tab = 0
     this.mode = 'pipelines'
@@ -21,6 +22,7 @@ export class Dashboard {
     this.navGeneration = 0
     this.config = null
     this.revealed = null
+    this.copying = false
     this.busy = false
     this.loading = new Map()
     this.loadingFrame = 0
@@ -110,6 +112,7 @@ export class Dashboard {
       }
     })
     key(['s'], () => void this.scale())
+    key(['y'], () => void this.copyConfig())
     key(['e'], () => void this.editConfig(false))
     key(['n'], () => void this.editConfig(true))
     key(['d'], () => void this.deleteConfig())
@@ -499,6 +502,25 @@ export class Dashboard {
     if (confirmation) await this.mutate(() => this.api.scale(app.name, formation.type, Number(quantity), size, confirmation))
   }
 
+  async copyConfig() {
+    if (TABS[this.tab] !== 'Config' || !this.app || !this.config || this.copying) return
+    const row = this.rows[this.main.selected]
+    if (row?.kind !== 'config' || typeof this.config[row.key] !== 'string') return
+    const generation = this.generation
+    this.copying = true
+    this.setStatus(`Copying ${row.key} to clipboard…`)
+    try {
+      // Copy the original value, not its masked, truncated, or sanitized display.
+      await this.writeClipboard(this.config[row.key])
+      if (!this.closed && generation === this.generation) this.setStatus(`Copied ${row.key} to clipboard.`, 'success')
+    } catch {
+      // Clipboard backend errors may include stdin. Never display that output.
+      if (!this.closed && generation === this.generation) this.setStatus('Could not copy value. Check your desktop session and clipboard tools; see README.', 'error')
+    } finally {
+      this.copying = false
+    }
+  }
+
   async editConfig(isNew) {
     if (TABS[this.tab] !== 'Config' || !this.writable() || !this.config) return
     const app = this.app
@@ -547,7 +569,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nLeaving the tab or app hides revealed values.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
