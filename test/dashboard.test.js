@@ -6,7 +6,10 @@ import blessed from 'blessed'
 import {createDemo} from '../src/demo.js'
 import {Dashboard} from '../src/ui/dashboard.js'
 import {clean} from '../src/ui/text.js'
-import {palette} from '../src/ui/theme.js'
+import {icons, palette} from '../src/ui/theme.js'
+
+const breadcrumbs = dashboard => clean(dashboard.header.content).split('\n')[1]
+  .split(icons.chevron).map(part => part.trim().replace(/^\S+\s+/, ''))
 
 async function harness(t, override = {}) {
   const input = new PassThrough()
@@ -43,6 +46,77 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   await delay(50)
   assert.equal(d.app, null)
   assert.equal(d.rows[0].kind, 'app')
+})
+
+test('direct pipeline and app-sidebar navigation show full parent breadcrumbs', async t => {
+  const {dashboard: d, key} = await harness(t)
+  assert.deepEqual(breadcrumbs(d), ['acme', 'constellation'])
+  assert.equal(d.team, null)
+  await key('a')
+  await key('\r')
+  assert.deepEqual(breadcrumbs(d), ['acme', 'constellation', 'constellation-staging'])
+  assert.equal(d.team, null)
+  await d.back()
+  assert.deepEqual(breadcrumbs(d), ['acme', 'constellation'])
+  assert.equal(d.rows[0].kind, 'app')
+})
+
+test('starting directly in an app resolves team and pipeline breadcrumbs', async t => {
+  const demo = createDemo()
+  const {dashboard: d} = await harness(t, {...demo, context: {app: demo.catalog.apps[1], reason: 'Direct app'}})
+  assert.deepEqual(breadcrumbs(d), ['acme', 'constellation', 'constellation-production'])
+})
+
+test('resource breadcrumbs do not inherit or change the sidebar team filter', async t => {
+  const demo = createDemo()
+  const otherTeam = {id: 'other-team', name: 'other-team'}
+  const otherPipeline = {id: 'other-pipeline', name: 'other-pipeline', owner: {type: 'team', id: otherTeam.id}}
+  demo.catalog.teams.push(otherTeam)
+  demo.catalog.pipelines.push(otherPipeline)
+  const {dashboard: d} = await harness(t, {...demo, context: {team: demo.catalog.teams[0], reason: 'Team filter'}})
+  await d.openPipeline(otherPipeline)
+  assert.deepEqual(breadcrumbs(d), ['other-team', 'other-pipeline'])
+  assert.equal(d.team.name, 'acme')
+  const appData = d.api.appData
+  d.api.appData = async id => ({...await appData(id), coupling: {pipeline: otherPipeline},
+    app: {...demo.catalog.apps[1], team: otherTeam},
+  })
+  await d.openApp(demo.catalog.apps[1])
+  assert.deepEqual(breadcrumbs(d), ['other-team', 'other-pipeline', 'constellation-production'])
+  assert.equal(d.team.name, 'acme')
+  d.api.appData = async id => ({...await appData(id), coupling: null, app: {...demo.catalog.apps[0], team: null}})
+  await d.openApp(demo.catalog.apps[0])
+  assert.deepEqual(breadcrumbs(d), ['Personal', 'No pipeline', 'constellation-staging'])
+  assert.equal(d.pipeline, null)
+  assert.equal(d.team.name, 'acme')
+})
+
+test('unavailable pipeline metadata does not prevent app views from loading', async t => {
+  const {dashboard: d} = await harness(t)
+  const appData = d.api.appData
+  d.api.appData = async id => ({...await appData(id), coupling: null, errors: {coupling: 'Permission denied'}})
+  await d.openApp(d.catalog.apps[0])
+  assert.deepEqual(breadcrumbs(d), ['acme', 'Pipeline unavailable', 'constellation-staging'])
+  assert.ok(d.data.formation.length)
+  assert.equal(d.messageTone, 'warning')
+})
+
+test('slow parent lookup cannot replace breadcrumbs after navigating to another app', async t => {
+  const {dashboard: d} = await harness(t)
+  const appData = d.api.appData
+  const lookupStarted = Promise.withResolvers()
+  const lookup = Promise.withResolvers()
+  d.api.get = async () => { lookupStarted.resolve(); return lookup.promise }
+  d.api.appData = async id => {
+    const data = await appData(id)
+    return id === 'app-staging' ? {...data, app: {...data.app, team: null}, coupling: {pipeline: {id: 'old', name: 'old-pipeline'}}} : data
+  }
+  const first = d.openApp(d.catalog.apps[0])
+  await lookupStarted.promise
+  await d.openApp(d.catalog.apps[1])
+  lookup.resolve({id: 'old', name: 'old-pipeline', owner: {type: 'user', id: 'user'}})
+  await first
+  assert.deepEqual(breadcrumbs(d), ['acme', 'constellation', 'constellation-production'])
 })
 
 test('config reveal persists across row navigation and is hidden on changing views', async t => {

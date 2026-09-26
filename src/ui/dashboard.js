@@ -2,6 +2,7 @@ import blessed from 'blessed'
 import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import {errorMessage} from '../api.js'
+import {resolveHierarchy} from '../hierarchy.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, tabIcons} from './theme.js'
@@ -15,6 +16,7 @@ export class Dashboard {
     this.tab = 0
     this.mode = 'pipelines'
     this.team = context.team ?? null
+    this.breadcrumbTeam = null
     this.pipeline = context.pipeline ?? null
     this.app = null
     this.rows = []
@@ -61,7 +63,7 @@ export class Dashboard {
     this.main.on('select', item => {
       if (this.modal) return
       const selected = this.rows[this.main.getItemIndex(item)]
-      if (selected?.kind === 'app') void this.openApp(selected.value)
+      if (selected?.kind === 'app') void this.openApp(selected.value, this.pipeline)
     })
     this.detail.on('click', mouse => {
       if (this.closed || this.modal || this.small.visible) return
@@ -129,7 +131,7 @@ export class Dashboard {
   async start() {
     if (this.context.team) this.mode = 'pipelines'
     this.drawNav()
-    if (this.context.app) await this.openApp(this.context.app)
+    if (this.context.app) await this.openApp(this.context.app, this.context.pipeline)
     else if (this.pipeline) await this.openPipeline(this.pipeline)
     else this.drawLanding()
     const warnings = [...this.catalog.warnings, ...this.context.warnings ?? []]
@@ -186,7 +188,9 @@ export class Dashboard {
 
   render() {
     if (this.closed) return
-    const scope = [['teams', this.team?.name], ['pipelines', this.pipeline?.name], ['apps', this.app?.name]]
+    const team = this.app || this.pipeline ? this.breadcrumbTeam?.name ?? 'Loading team…' : this.team?.name
+    const pipeline = this.pipeline?.name ?? (this.app ? this.data ? this.data.errors.coupling ? 'Pipeline unavailable' : 'No pipeline' : 'Loading pipeline…' : null)
+    const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
       .filter(([, name]) => name).map(([icon, name]) => badge(icon, name, 'fg')).join(`  ${paint(icons.chevron, 'muted')}  `)
     this.header.setContent(`${paint(`${icons.heroku}  HEROKU DASH`, 'accent', true)}   ${this.demo ? `${badge('staging', 'DEMO', 'info')}   ` : ''}${this.api.readOnly ? badge('lock', 'READ ONLY', 'info') : badge('globe', 'LIVE', 'success')}\n${scope || badge('globe', 'All accessible resources', 'muted')}`)
     const tabs = compact => TABS.map((tab, i) => paint(i === this.tab ? `[${i + 1} ${icons[tabIcons[i]]} ${tab}]` : `${i + 1} ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, i === this.tab ? 'accent' : 'muted', i === this.tab)).join('  ')
@@ -233,10 +237,7 @@ export class Dashboard {
       this.drawLanding()
       this.setStatus(`Browsing ${this.team?.name ?? 'all teams and personal apps'}. Press a for apps.`)
     } else if (this.mode === 'pipelines') await this.openPipeline(selected)
-    else {
-      this.pipeline = null
-      await this.openApp(selected)
-    }
+    else await this.openApp(selected)
   }
 
   clearApp() {
@@ -244,6 +245,7 @@ export class Dashboard {
     for (const key of ['app', 'pipeline', 'config']) this.loading.delete(key)
     this.syncLoadingAnimation()
     this.app = null
+    this.breadcrumbTeam = null
     this.data = null
     this.config = null
     this.configError = null
@@ -260,6 +262,8 @@ export class Dashboard {
   async openPipeline(pipeline) {
     this.clearApp()
     this.pipeline = pipeline
+    const owner = pipeline.owner ?? this.catalog.pipelines.find(item => item.id === pipeline.id)?.owner
+    this.breadcrumbTeam = owner?.type === 'team' ? this.catalog.teams.find(item => item.id === owner.id) ?? null : owner ? {name: 'Personal'} : null
     const generation = this.generation
     this.busy = true
     this.summary.setContent(`${badge('pipelines', pipeline.name)}\n\n${badge('refresh', 'Loading pipeline apps…', 'info')}`)
@@ -267,8 +271,15 @@ export class Dashboard {
     this.setRows([])
     const finishLoading = this.beginLoading('pipeline', `Loading pipeline ${pipeline.name}…`)
     try {
-      const apps = sortApps(await this.api.pipelineApps(pipeline.id))
+      const [appsResult, hierarchy] = await Promise.all([
+        this.api.pipelineApps(pipeline.id).then(apps => ({apps}), error => ({error})),
+        resolveHierarchy(this.api, this.catalog, {pipeline}),
+      ])
       if (this.closed || generation !== this.generation) return
+      this.pipeline = hierarchy.pipeline
+      this.breadcrumbTeam = hierarchy.team
+      if (appsResult.error) throw appsResult.error
+      const apps = sortApps(appsResult.apps)
       this.pipelineApps = apps
       this.summary.setContent(`${badge('pipelines', pipeline.name)}\n\n${STAGES.map(stage => badge(stageStyles[stage].icon, `${stage}: ${apps.filter(a => a.stage === stage).length}`, stageStyles[stage].tone)).join('   ')}`)
       this.setRows(apps.length ? apps.map(app => ({kind: 'app', value: app, ...stageStyles[app.stage], emphasis: app.stage.toUpperCase(),
@@ -276,8 +287,8 @@ export class Dashboard {
         detail: `${single(app.name)}\n\nStage: ${app.stage}\nTeam: ${single(app.team?.name ?? 'Personal / shared')}\nRegion: ${single(app.region?.name)}\nStack: ${single(app.stack?.name)}\n\nEnter to view resources, add-ons, config, settings, releases, and metrics.`,
       })) : [{icon: 'apps', tone: 'muted', label: 'This pipeline has no apps', detail: 'Press a to browse accessible apps.'}])
       this.main.focus()
-      this.message = 'Pipeline loaded. Select an app and press Enter.'
-      this.messageTone = 'success'
+      this.message = `Pipeline loaded. Select an app and press Enter.${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
+      this.messageTone = hierarchy.errors.hierarchy ? 'warning' : 'success'
     } catch (error) {
       if (generation === this.generation) {
         this.setRows([{icon: 'error', tone: 'error', label: 'Unable to load pipeline', detail: errorMessage(error)}])
@@ -290,9 +301,11 @@ export class Dashboard {
     }
   }
 
-  async openApp(app) {
+  async openApp(app, pipeline = null) {
     this.clearApp()
     this.app = app
+    this.pipeline = pipeline
+    this.breadcrumbTeam = app.team ?? null
     this.tab = 0
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}\n\n${badge('refresh', 'Loading app data…', 'info')}`)
     this.setRows([])
@@ -309,6 +322,11 @@ export class Dashboard {
     try {
       const data = await this.api.appData(app.id)
       if (this.closed || generation !== this.generation) return
+      const hierarchy = await resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline})
+      if (this.closed || generation !== this.generation) return
+      this.pipeline = hierarchy.pipeline
+      this.breadcrumbTeam = hierarchy.team
+      Object.assign(data.errors, hierarchy.errors)
       this.data = data
       this.app = data.app
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`

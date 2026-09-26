@@ -75,3 +75,19 @@ test('coupling only treats 404 as an app without a pipeline', async () => {
   await assert.rejects(api.coupling('app'))
   assert.match(errorMessage({http: {http: {statusCode: 429}}}), /rate limit/)
 })
+
+test('app data distinguishes no pipeline from an inaccessible pipeline coupling', async () => {
+  let statusCode = 404
+  const api = new HerokuAPI({async request(path) {
+    if (path.endsWith('/pipeline-couplings')) throw {http: {statusCode}}
+    return {body: path === '/apps/app' ? {id: 'app', name: 'app'} : []}
+  }})
+  const standalone = await api.appData('app')
+  assert.equal(standalone.coupling, null)
+  assert.equal(standalone.errors.coupling, undefined)
+  statusCode = 403
+  const inaccessible = await api.appData('app')
+  assert.equal(inaccessible.app.name, 'app')
+  assert.equal(inaccessible.coupling, null)
+  assert.match(inaccessible.errors.coupling, /permission/)
+})

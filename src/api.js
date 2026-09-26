@@ -80,6 +80,7 @@ export class HerokuAPI {
     const base = `/apps/${encode(app)}`
     const sections = {
       app: () => this.get(base),
+      coupling: () => this.coupling(app),
       formation: () => this.list(`${base}/formation`),
       dynos: () => this.list(`${base}/dynos`),
       addons: () => this.list(`${base}/addons`),
@@ -92,7 +93,7 @@ export class HerokuAPI {
     const data = {errors: {}, fetchedAt: new Date().toISOString()}
     await Promise.all(Object.entries(sections).map(async ([key, load]) => {
       try { data[key] = await load() }
-      catch (error) { data.errors[key] = errorMessage(error); data[key] = key === 'app' ? null : [] }
+      catch (error) { data.errors[key] = errorMessage(error); data[key] = ['app', 'coupling'].includes(key) ? null : [] }
     }))
     if (!data.app) throw new Error(data.errors.app)
     return data

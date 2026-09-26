@@ -60,6 +60,8 @@ When remotes span multiple pipelines, the browser asks you to choose one. Use `-
 
 The left sidebar browses teams, pipelines, or apps. Choosing a team scopes its pipelines and apps; **All teams / personal** clears the scope. Pipelines list apps ordered by stage. Open an app to see its seven views, with a selectable resource list above a scrollable details pane.
 
+The heading shows the resource hierarchy: **team › pipeline › app**, including when you open an app or pipeline directly. Personal resources use **Personal**, and apps without a pipeline use **No pipeline**. Opening a resource resolves its parents without changing the sidebar's team filter.
+
 Nerd Font icons identify teams, pipelines, apps, process types, databases, and the app views. **Green** indicates healthy/successful states, **amber** indicates pending states or maintenance, **red** indicates failures, and **gray** indicates inactive or unknown states. Config rows use a lock for masked values and an amber eye for revealed values. Status text remains visible alongside icons and colors.
 
 Pipeline stages are color-coded: **blue** development, **purple** review, **amber** staging, and **green** production. The active view and focused pane use Heroku purple. On narrower terminals, inactive tabs show their number and icon; the active tab keeps its name.
@@ -164,6 +166,7 @@ Without `--repo`, this uses the offline demo. Live terminal checks always pass `
 ```text
 src/commands/dash.js   Command flags, authentication, startup
 src/project.js         Git context and pipeline resolution
+src/hierarchy.js       Team and pipeline parents for resource breadcrumbs
 src/api.js             Platform API reads, pagination, guarded writes
 src/ui/dashboard.js    Terminal navigation, prompts, refresh, lifecycle
 src/ui/views.js        View models, config masking, operational metrics
