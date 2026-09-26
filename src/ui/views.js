@@ -30,7 +30,7 @@ export function operationalMetrics(data) {
   }
 }
 
-export function appRows(tab, data, {config, configError, revealed = null} = {}) {
+export function appRows(tab, data, {config, configError, revealed = new Set()} = {}) {
   const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
   const rows = []
   const error = section => {
@@ -73,8 +73,11 @@ export function appRows(tab, data, {config, configError, revealed = null} = {}) 
   if (tab === 'Config') {
     if (configError) rows.push(row('Config vars unavailable', configError, {icon: 'error', tone: 'error', emphasis: 'unavailable'}))
     else if (!config) rows.push(row('Loading config vars…', 'Config vars are fetched only when you open this tab.', {icon: 'refresh', tone: 'info'}))
-    else for (const key of Object.keys(config).sort()) rows.push(row(`${key} = ${key === revealed ? single(config[key]) : '••••••••'}`,
-      `${key}\n\n${key === revealed ? clean(config[key]) : 'Value hidden. Press v to reveal this variable.'}\n\n[y] copy value   [v] reveal / hide\n[e] replace value   [n] new variable   [d] delete\nConfig changes create a release and restart the app.`, {kind: 'config', key, icon: key === revealed ? 'eye' : 'lock', tone: key === revealed ? 'warning' : 'cyan', emphasis: key}))
+    else for (const key of Object.keys(config).sort()) {
+      const visible = revealed.has(key)
+      rows.push(row(`${key} = ${visible ? single(config[key]) : '••••••••'}`,
+        `${key}\n\n${visible ? clean(config[key]) : 'Value hidden. Press v to reveal this variable.'}\n\n[y] copy value   [v] reveal / hide (this variable)\n[e] replace value   [n] new variable   [d] delete\nConfig changes create a release and restart the app.`, {kind: 'config', key, icon: visible ? 'eye' : 'lock', tone: visible ? 'warning' : 'cyan', emphasis: key}))
+    }
   }
   if (tab === 'Settings') {
     rows.push(row(`Maintenance mode: ${app.maintenance ? 'ON' : 'OFF'}    [m] toggle`, 'Press m to toggle maintenance mode. This changes how the app serves requests.', {icon: 'settings', tone: app.maintenance ? 'warning' : 'success', emphasis: app.maintenance ? 'ON' : 'OFF'}))

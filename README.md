@@ -114,7 +114,7 @@ Every write displays the target app and proposed change, then requires typing th
 
 `--read-only` blocks all non-GET requests at the plugin's API boundary, in addition to disabling mutation prompts. The offline demo also runs read-only.
 
-Config values are fetched only when opening Config. They stay masked until you press `v`; moving to another config row, switching views/apps, or manually refreshing hides them again. The plugin keeps fetched values in memory for the selected app and does not write config values to disk. Automatic refresh updates operational app data; use `R` to refresh config values.
+Config values are fetched only when opening Config. Press `v` to reveal or hide the selected variable independently of the others. Moving between rows keeps revealed values visible, so you can inspect several at once. Switching views/apps or manually refreshing hides them all again. The plugin keeps fetched values in memory for the selected app and does not write config values to disk. Automatic refresh updates operational app data; use `R` to refresh config values.
 
 Press **`y`** to copy the selected variable's value without revealing it. Copying preserves the complete value, including whitespace, Unicode, and multiline content, and works in `--read-only` mode. The status bar confirms the variable name without displaying its value.
 

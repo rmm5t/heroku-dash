@@ -17,11 +17,12 @@ export class Dashboard {
     this.pipeline = context.pipeline ?? null
     this.app = null
     this.rows = []
+    this.updatingRows = false
     this.navItems = []
     this.generation = 0
     this.navGeneration = 0
     this.config = null
-    this.revealed = null
+    this.revealed = new Set()
     this.copying = false
     this.busy = false
     this.loading = new Map()
@@ -53,10 +54,7 @@ export class Dashboard {
     this.screen.on('resize', () => this.render())
     this.screen.once('destroy', () => this.close())
     this.main.on('select item', () => {
-      if (this.revealed && this.rows[this.main.selected]?.key !== this.revealed) {
-        this.revealed = null
-        this.drawApp()
-      }
+      if (this.updatingRows) return
       this.drawDetail()
     })
     this.main.on('select', item => {
@@ -107,7 +105,8 @@ export class Dashboard {
     key(['v'], () => {
       const selected = this.rows[this.main.selected]
       if (this.app && TABS[this.tab] === 'Config' && selected?.kind === 'config') {
-        this.revealed = this.revealed === selected.key ? null : selected.key
+        if (this.revealed.has(selected.key)) this.revealed.delete(selected.key)
+        else this.revealed.add(selected.key)
         this.drawApp()
       }
     })
@@ -242,7 +241,7 @@ export class Dashboard {
     this.data = null
     this.config = null
     this.configError = null
-    this.revealed = null
+    this.revealed.clear()
     this.busy = false
   }
 
@@ -333,9 +332,17 @@ export class Dashboard {
 
   setRows(rows, preserve = false) {
     const selected = preserve ? this.main.selected : 0
-    this.rows = rows
-    this.main.setItems(rows.map(rowLabel))
-    this.main.select(Math.min(selected, Math.max(0, rows.length - 1)))
+    // Blessed's setItems temporarily selects row zero. Ignore those synthetic
+    // selection events until the intended row is restored, so details aren't
+    // rendered for a temporary selection or a partially updated list.
+    this.updatingRows = true
+    try {
+      this.rows = rows
+      this.main.setItems(rows.map(rowLabel))
+      this.main.select(Math.min(selected, Math.max(0, rows.length - 1)))
+    } finally {
+      this.updatingRows = false
+    }
     this.drawDetail()
   }
 
@@ -350,7 +357,7 @@ export class Dashboard {
   changeTab(index) {
     if (!this.app) return
     this.tab = index
-    this.revealed = null
+    this.revealed.clear()
     this.main.select(0)
     this.drawApp()
     if (TABS[index] === 'Config' && !this.config) void this.loadConfig()
@@ -393,7 +400,7 @@ export class Dashboard {
   async reload() {
     if (this.busy) return
     if (this.app) {
-      this.revealed = null
+      this.revealed.clear()
       await this.loadApp()
       if (TABS[this.tab] === 'Config') await this.loadConfig()
     } else if (this.pipeline) await this.openPipeline(this.pipeline)
@@ -478,7 +485,7 @@ export class Dashboard {
       if (this.closed) return
       this.busy = false
       this.config = null
-      this.revealed = null
+      this.revealed.clear()
       const refreshed = await this.loadApp()
       if (TABS[this.tab] === 'Config') await this.loadConfig()
       this.setStatus(refreshed ? 'Change applied. App data refreshed.' : `Change applied, but refresh failed. ${this.message}`, refreshed ? 'success' : 'warning')
@@ -569,7 +576,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()

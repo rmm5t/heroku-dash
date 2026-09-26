@@ -37,21 +37,81 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.rows[0].kind, 'app')
 })
 
-test('config reveal is scoped to selection and hidden on changing views', async t => {
+test('config reveal persists across row navigation and is hidden on changing views', async t => {
   const {dashboard: d, key} = await harness(t)
   await key('\r')
   await key('4')
   assert.equal(d.config.EXAMPLE_SECRET, 'demo-only-value')
   assert.ok(!d.detail.content.includes('demo-only-value'))
   await key('v')
-  assert.equal(d.revealed, 'EXAMPLE_SECRET')
+  assert.ok(d.revealed.has('EXAMPLE_SECRET'))
   assert.ok(d.detail.content.includes('demo-only-value'))
   await key('j')
-  assert.equal(d.revealed, null)
-  assert.ok(!d.main.content.includes('demo-only-value'))
+  assert.ok(d.revealed.has('EXAMPLE_SECRET'))
+  assert.ok(d.main.items[0].content.includes('demo-only-value'))
+  assert.ok(!d.detail.content.includes('demo-only-value'))
   await key('1')
   await key('4')
-  assert.equal(d.revealed, null)
+  assert.equal(d.revealed.size, 0)
+})
+
+test('v repeatedly reveals and hides the same config row without changing selection', async t => {
+  const {dashboard: d, screen, key} = await harness(t)
+  const config = {FIRST: 'first-private-value', SECOND: 'second-private-value', THIRD: 'third-private-value'}
+  d.api.config = async () => config
+  await key('\r')
+  await key('4')
+  const visible = () => screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  for (const [index, name] of Object.keys(config).entries()) {
+    if (index) await key('j')
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await key('v')
+      assert.equal(d.main.selected, index)
+      assert.deepEqual([...d.revealed], [name])
+      assert.ok(d.main.items[index].content.includes(config[name]))
+      assert.ok(d.detail.content.includes(config[name]))
+      assert.ok(visible().includes(config[name]))
+      await key('v')
+      assert.equal(d.main.selected, index)
+      assert.equal(d.revealed.size, 0)
+      for (const value of Object.values(config)) {
+        assert.ok(!d.main.items.some(item => item.content.includes(value)))
+        assert.ok(!d.detail.content.includes(value))
+        assert.ok(!visible().includes(value))
+      }
+    }
+  }
+})
+
+test('multiple config values can be revealed and hidden independently', async t => {
+  const {dashboard: d, screen, key} = await harness(t)
+  const config = {FIRST: 'first-private-value', SECOND: 'second-private-value', THIRD: 'third-private-value'}
+  d.api.config = async () => config
+  await key('\r')
+  await key('4')
+  const visible = () => screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  await key('v')
+  await key('j')
+  await key('v')
+  assert.ok(visible().includes(config.FIRST))
+  assert.ok(visible().includes(config.SECOND))
+  assert.ok(!visible().includes(config.THIRD))
+  await key('j')
+  assert.ok(visible().includes(config.FIRST))
+  assert.ok(visible().includes(config.SECOND))
+  await key('k')
+  await key('v')
+  assert.ok(visible().includes(config.FIRST))
+  assert.ok(!visible().includes(config.SECOND))
+  await d.loadApp(true)
+  assert.ok(visible().includes(config.FIRST))
+  assert.ok(!visible().includes(config.SECOND))
+  await key('v')
+  assert.ok(visible().includes(config.FIRST))
+  assert.ok(visible().includes(config.SECOND))
+  await d.reload()
+  assert.equal(d.revealed.size, 0)
+  for (const value of Object.values(config)) assert.ok(!visible().includes(value))
 })
 
 test('y copies exact config values while masked, revealed, or empty in read-only mode', async t => {
@@ -64,13 +124,13 @@ test('y copies exact config values while masked, revealed, or empty in read-only
   assert.equal(d.api.readOnly, true)
   await key('y')
   assert.deepEqual(copies, [value])
-  assert.equal(d.revealed, null)
+  assert.equal(d.revealed.size, 0)
   assert.equal(d.message, 'Copied MULTILINE to clipboard.')
   const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
   assert.ok(!visible.includes('secret-first-line'))
   await key('v')
   await key('y')
-  assert.equal(d.revealed, 'MULTILINE')
+  assert.ok(d.revealed.has('MULTILINE'))
   await key('j')
   await key('y')
   assert.deepEqual(copies, [value, value, ''])
@@ -99,7 +159,7 @@ test('clipboard errors do not expose config values or leave the UI busy', async 
   assert.equal(d.messageTone, 'error')
   assert.match(d.message, /Could not copy value/)
   assert.equal(d.copying, false)
-  assert.equal(d.revealed, null)
+  assert.equal(d.revealed.size, 0)
   assert.ok(!d.message.includes('demo-only-value'))
   const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
   assert.ok(!visible.includes('demo-only-value'))
