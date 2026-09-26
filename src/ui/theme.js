@@ -5,6 +5,7 @@ export const palette = {
   bg: '#161b22', panel: '#1c212b', fg: '#c9d1d9', muted: '#8b949e',
   accent: '#bc8cff', border: '#484f58', selected: '#30304b',
   success: '#7ee787', warning: '#e3b341', error: '#ff7b72', info: '#79c0ff', cyan: '#76e3ea',
+  loadingTrail: '#916bbb', loadingFade: '#5e467e', loadingDim: '#362b48',
 }
 
 // Nerd Fonts' BMP glyphs stay one terminal cell wide with a Nerd Font Mono.
@@ -36,6 +37,28 @@ export function paint(value, tone = 'fg', bold = false) {
 
 export function badge(icon, value, tone = 'accent') {
   return `${paint(icons[icon] ?? icons.overview, tone)} ${paint(single(value), tone)}`
+}
+
+export const SCANNER_INTERVAL = 40
+
+export function scannerFrame(frame) {
+  // OpenCode-inspired square/dot scanner: light trails behind the moving head,
+  // then fades during a brief hold before the direction reverses.
+  const width = 8
+  const halfCycle = width - 1 + 4
+  const phase = frame % (halfCycle * 2)
+  const forward = phase < halfCycle
+  const step = phase % halfCycle
+  const position = Math.min(step, width - 1)
+  const head = forward ? position : width - 1 - position
+  const fade = Math.max(0, step - (width - 1))
+  const trail = ['accent', 'loadingTrail', 'loadingFade', 'loadingDim']
+  return Array.from({length: width}, (_, index) => {
+    const distance = forward ? head - index : index - head
+    if (distance === 0) return paint('■', 'accent', true)
+    if (distance > 0 && distance + fade < trail.length) return paint('■', trail[distance + fade])
+    return paint('⬝', 'loadingDim')
+  }).join('')
 }
 
 export function stateStyle(state) {

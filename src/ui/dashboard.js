@@ -2,7 +2,7 @@ import blessed from 'blessed'
 import {spawn} from 'node:child_process'
 import {errorMessage} from '../api.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
-import {badge, icons, paint, palette, rowLabel, shortcut, stageStyles, tabIcons} from './theme.js'
+import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, tabIcons} from './theme.js'
 
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 
@@ -22,6 +22,9 @@ export class Dashboard {
     this.config = null
     this.revealed = null
     this.busy = false
+    this.loading = new Map()
+    this.loadingFrame = 0
+    this.loadingTimer = null
     this.closed = false
     this.filter = ''
     this.message = context.reason
@@ -46,6 +49,7 @@ export class Dashboard {
       content: `${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Esc', 'back'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${[['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R', 'refresh'], ['o', 'browser'], ['?', 'help'], ['q', 'quit']].map(([key, text]) => shortcut(key, text)).join('  ')}`})
     this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: 'heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit'})
     this.screen.on('resize', () => this.render())
+    this.screen.once('destroy', () => this.close())
     this.main.on('select item', () => {
       if (this.revealed && this.rows[this.main.selected]?.key !== this.revealed) {
         this.revealed = null
@@ -130,6 +134,48 @@ export class Dashboard {
 
   setStatus(message, tone = 'info') { this.message = single(message); this.messageTone = tone; this.render() }
 
+  beginLoading(key, label) {
+    if (this.closed) return () => {}
+    const operation = {label}
+    this.loading.set(key, operation)
+    this.syncLoadingAnimation()
+    this.render()
+    return () => {
+      // A superseded request must not clear the indicator for its replacement.
+      if (this.loading.get(key) !== operation) return
+      this.loading.delete(key)
+      this.syncLoadingAnimation()
+      this.render()
+    }
+  }
+
+  syncLoadingAnimation() {
+    if (this.closed || !this.loading.size) {
+      clearInterval(this.loadingTimer)
+      this.loadingTimer = null
+      this.loadingFrame = 0
+    } else if (!this.loadingTimer) {
+      this.loadingTimer = setInterval(() => {
+        this.loadingFrame++
+        // Redraw only the status content: don't reset list selection, scroll
+        // position, or an input prompt while the user continues navigating.
+        this.drawStatus()
+        this.screen.render()
+      }, SCANNER_INTERVAL)
+      this.loadingTimer.unref()
+    }
+  }
+
+  drawStatus() {
+    const current = [...this.loading.values()].at(-1)
+    if (current) {
+      this.status.setContent(`${scannerFrame(this.loadingFrame)}  ${paint(single(current.label), 'info')}`)
+    } else {
+      const icon = {error: 'error', warning: 'warning', success: 'success', info: 'overview', muted: 'clock'}[this.messageTone]
+      this.status.setContent(badge(icon, this.message ?? '', this.messageTone))
+    }
+  }
+
   render() {
     if (this.closed) return
     const scope = [['teams', this.team?.name], ['pipelines', this.pipeline?.name], ['apps', this.app?.name]]
@@ -139,8 +185,7 @@ export class Dashboard {
     const fullTabs = tabs(false)
     const compact = blessed.unicode.strWidth(clean(fullTabs)) > this.tabs.width - 4
     this.tabs.setContent(this.app ? compact ? tabs(true) : fullTabs : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
-    const statusIcon = {error: 'error', warning: 'warning', success: 'success', info: 'overview', muted: 'clock'}[this.messageTone]
-    this.status.setContent(`${this.busy ? `${badge('refresh', 'Loading…', 'info')}  ` : ''}${badge(statusIcon, this.message ?? '', this.messageTone)}`)
+    this.drawStatus()
     if (this.screen.width < 80 || this.screen.height < 24) { this.small.show(); this.small.setFront() }
     else this.small.hide()
     this.screen.render()
@@ -188,6 +233,8 @@ export class Dashboard {
 
   clearApp() {
     this.generation++
+    for (const key of ['app', 'pipeline', 'config']) this.loading.delete(key)
+    this.syncLoadingAnimation()
     this.app = null
     this.data = null
     this.config = null
@@ -210,6 +257,7 @@ export class Dashboard {
     this.summary.setContent(`${badge('pipelines', pipeline.name)}\n\n${badge('refresh', 'Loading pipeline apps…', 'info')}`)
     this.main.setLabel(` ${icons.apps}  Pipeline apps `)
     this.setRows([])
+    const finishLoading = this.beginLoading('pipeline', `Loading pipeline ${pipeline.name}…`)
     try {
       const apps = sortApps(await this.api.pipelineApps(pipeline.id))
       if (this.closed || generation !== this.generation) return
@@ -230,6 +278,7 @@ export class Dashboard {
       }
     } finally {
       if (generation === this.generation) { this.busy = false; this.render() }
+      finishLoading()
     }
   }
 
@@ -248,7 +297,7 @@ export class Dashboard {
     const generation = this.generation
     const app = this.app
     this.busy = true
-    this.render()
+    const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…`)
     try {
       const data = await this.api.appData(app.id)
       if (this.closed || generation !== this.generation) return
@@ -267,6 +316,7 @@ export class Dashboard {
       return false
     } finally {
       if (generation === this.generation) { this.busy = false; this.render() }
+      finishLoading()
     }
   }
 
@@ -307,6 +357,7 @@ export class Dashboard {
     if (!this.app || this.closed) return
     const generation = this.generation
     const sequence = this.configSequence = (this.configSequence ?? 0) + 1
+    const finishLoading = this.beginLoading('config', `Loading config vars for ${this.app.name}…`)
     try {
       const config = await this.api.config(this.app.id)
       if (this.closed || generation !== this.generation || sequence !== this.configSequence) return
@@ -315,6 +366,8 @@ export class Dashboard {
     } catch (error) {
       if (generation !== this.generation || sequence !== this.configSequence) return
       this.configError = errorMessage(error)
+    } finally {
+      finishLoading()
     }
     this.drawApp()
   }
@@ -344,6 +397,7 @@ export class Dashboard {
     else {
       const sequence = ++this.navGeneration
       this.setStatus('Refreshing teams, pipelines, and apps…')
+      const finishLoading = this.beginLoading('catalog', 'Refreshing teams, pipelines, and apps…')
       try {
         const catalog = await this.api.catalog()
         if (this.closed || sequence !== this.navGeneration) return
@@ -351,6 +405,7 @@ export class Dashboard {
         this.drawNav()
         this.setStatus(catalog.warnings.join(' | ') || 'Workspace refreshed.', catalog.warnings.length ? 'warning' : 'success')
       } catch (error) { this.setStatus(errorMessage(error), 'error') }
+      finally { finishLoading() }
     }
   }
 
@@ -414,6 +469,7 @@ export class Dashboard {
     this.modal = modal
     this.busy = true
     this.setStatus('Applying change…')
+    const finishLoading = this.beginLoading('mutation', 'Applying confirmed change…')
     try {
       await action()
       if (this.closed) return
@@ -424,7 +480,7 @@ export class Dashboard {
       if (TABS[this.tab] === 'Config') await this.loadConfig()
       this.setStatus(refreshed ? 'Change applied. App data refreshed.' : `Change applied, but refresh failed. ${this.message}`, refreshed ? 'success' : 'warning')
     } catch (error) { this.setStatus(errorMessage(error), 'error') }
-    finally { modal.destroy(); this.modal = null; this.busy = false; this.render() }
+    finally { modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
   }
 
   async scale() {
@@ -502,10 +558,12 @@ export class Dashboard {
     if (this.closed) return
     this.closed = true
     clearInterval(this.timer)
+    this.loading.clear()
+    this.syncLoadingAnimation()
     this.generation++
     this.cancelPrompt?.()
     this.config = null
-    this.screen.destroy()
+    if (!this.screen.destroyed) this.screen.destroy()
   }
 }
 

@@ -5,6 +5,7 @@ import test from 'node:test'
 import blessed from 'blessed'
 import {createDemo} from '../src/demo.js'
 import {Dashboard} from '../src/ui/dashboard.js'
+import {clean} from '../src/ui/text.js'
 
 async function harness(t, override = {}) {
   const input = new PassThrough()
@@ -224,4 +225,117 @@ test('styled config rows preserve literal tags and reject remote terminal escape
   assert.ok(!d.main.items[0].content.includes('\x1b[2J'))
   await key('v')
   assert.ok(!visible().includes('literal'))
+})
+
+test('loading scanner advances and reverses without disturbing selection or scrolling', async t => {
+  const {dashboard: d, screen} = await harness(t)
+  await d.openApp(d.catalog.apps[0])
+  const data = d.data
+  const request = Promise.withResolvers()
+  d.api.appData = () => request.promise
+  t.mock.timers.enable({apis: ['setInterval']})
+  d.main.select(1)
+  d.detail.setContent(Array.from({length: 40}, (_, i) => `Detail line ${i}`).join('\n'))
+  d.detail.setScroll(5)
+  d.detail.focus()
+  const scroll = d.detail.getScroll()
+  const loading = d.loadApp(true)
+  const scanner = () => clean(d.status.content).slice(0, 8)
+  assert.equal(scanner(), '■⬝⬝⬝⬝⬝⬝⬝')
+  t.mock.timers.tick(40)
+  assert.equal(scanner(), '■■⬝⬝⬝⬝⬝⬝')
+  t.mock.timers.tick(40 * 6)
+  assert.equal(scanner(), '⬝⬝⬝⬝■■■■')
+  t.mock.timers.tick(40 * 4)
+  assert.equal(scanner(), '⬝⬝⬝⬝⬝⬝⬝■')
+  t.mock.timers.tick(40)
+  assert.equal(scanner(), '⬝⬝⬝⬝⬝⬝■■')
+  assert.equal(d.main.selected, 1)
+  assert.equal(screen.focused, d.detail)
+  assert.equal(d.detail.getScroll(), scroll)
+  request.resolve(data)
+  await loading
+  assert.equal(d.loadingTimer, null)
+  assert.ok(!clean(d.status.content).includes('■'))
+})
+
+test('loading continues until overlapping app and config requests finish', async t => {
+  const {dashboard: d} = await harness(t)
+  await d.openApp(d.catalog.apps[0])
+  const data = d.data
+  const app = Promise.withResolvers()
+  const config = Promise.withResolvers()
+  d.api.appData = () => app.promise
+  d.api.config = () => config.promise
+  const appLoading = d.loadApp()
+  const configLoading = d.loadConfig()
+  app.resolve(data)
+  await appLoading
+  assert.match(clean(d.status.content), /Loading config vars/)
+  assert.ok(d.loadingTimer)
+  config.resolve({TOKEN: 'masked'})
+  await configLoading
+  assert.equal(d.loadingTimer, null)
+  assert.equal(d.loading.size, 0)
+})
+
+test('an old config response cannot stop a newer request animation', async t => {
+  const {dashboard: d} = await harness(t)
+  await d.openApp(d.catalog.apps[0])
+  const old = Promise.withResolvers()
+  const latest = Promise.withResolvers()
+  d.api.config = () => old.promise
+  const oldLoading = d.loadConfig()
+  d.api.config = () => latest.promise
+  const latestLoading = d.loadConfig()
+  old.resolve({TOKEN: 'old'})
+  await oldLoading
+  assert.ok(d.loadingTimer)
+  assert.equal(d.config, null)
+  latest.resolve({TOKEN: 'latest'})
+  await latestLoading
+  assert.equal(d.config.TOKEN, 'latest')
+  assert.equal(d.loadingTimer, null)
+})
+
+test('catalog failure and terminal destruction clean up loading timers', async t => {
+  const {dashboard: d, screen} = await harness(t)
+  await d.back()
+  const catalog = Promise.withResolvers()
+  d.api.catalog = () => catalog.promise
+  const reload = d.reload()
+  assert.match(clean(d.status.content), /Refreshing teams/)
+  assert.ok(d.loadingTimer)
+  catalog.reject(new Error('Network unavailable'))
+  await reload
+  assert.equal(d.loadingTimer, null)
+  assert.match(clean(d.status.content), /Network unavailable/)
+
+  const pipeline = Promise.withResolvers()
+  d.api.pipelineApps = () => pipeline.promise
+  const opening = d.openPipeline(d.catalog.pipelines[0])
+  assert.match(clean(d.status.content), /Loading pipeline/)
+  assert.ok(d.loadingTimer)
+  screen.destroy()
+  assert.equal(d.closed, true)
+  assert.equal(d.loadingTimer, null)
+  pipeline.resolve([])
+  await opening
+  assert.equal(d.loading.size, 0)
+  assert.equal(d.loadingTimer, null)
+})
+
+test('leaving an app clears its outstanding loading indicator', async t => {
+  const {dashboard: d} = await harness(t)
+  await d.openApp(d.catalog.apps[0])
+  const config = Promise.withResolvers()
+  d.api.config = () => config.promise
+  const loading = d.loadConfig()
+  await d.back()
+  assert.equal(d.app, null)
+  assert.equal(d.loadingTimer, null)
+  config.resolve({TOKEN: 'old-app'})
+  await loading
+  assert.equal(d.config, null)
+  assert.equal(d.loadingTimer, null)
 })

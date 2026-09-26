@@ -64,6 +64,8 @@ Nerd Font icons identify teams, pipelines, apps, process types, databases, and t
 
 Pipeline stages are color-coded: **blue** development, **purple** review, **amber** staging, and **green** production. The active view and focused pane use Heroku purple. On narrower terminals, inactive tabs show their number and icon; the active tab keeps its name.
 
+While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweeps back and forth in the status bar, with a fading trail and a brief pause at each turn. It updates every 40 ms alongside the operation in progress. It covers pipeline/app loads, config vars, workspace refreshes, and confirmed changes, and stops when the work finishes.
+
 | View | What you can do |
 | --- | --- |
 | **1 Overview** | Inspect app identity, team, region, stack, URLs, formation, and latest release |
