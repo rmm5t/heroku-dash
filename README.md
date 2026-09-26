@@ -8,6 +8,8 @@ Run **`heroku dash`** inside a Git repository to open its Heroku pipeline. Brows
 
 Requires a current [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli), Node.js 22+, and an interactive terminal. The minimum terminal size is 80 × 24; 120 × 36 or larger is recommended.
 
+For the dashboard's icons, select a **[Nerd Font](https://www.nerdfonts.com/)** in your terminal settings. A **Nerd Font Mono** variant, such as **JetBrainsMono Nerd Font Mono** or **FiraCode Nerd Font Mono**, keeps icons aligned to the terminal grid. Missing or boxed icons usually mean the terminal is using an unpatched font.
+
 ```sh
 npm ci
 npm run build
@@ -58,6 +60,10 @@ When remotes span multiple pipelines, the browser asks you to choose one. Use `-
 
 The left sidebar browses teams, pipelines, or apps. Choosing a team scopes its pipelines and apps; **All teams / personal** clears the scope. Pipelines list apps ordered by stage. Open an app to see its seven views, with a selectable resource list above a scrollable details pane.
 
+Nerd Font icons identify teams, pipelines, apps, process types, databases, and the app views. **Green** indicates healthy/successful states, **amber** indicates pending states or maintenance, **red** indicates failures, and **gray** indicates inactive or unknown states. Config rows use a lock for masked values and an amber eye for revealed values. Status text remains visible alongside icons and colors.
+
+Pipeline stages are color-coded: **blue** development, **purple** review, **amber** staging, and **green** production. The active view and focused pane use Heroku purple. On narrower terminals, inactive tabs show their number and icon; the active tab keeps its name.
+
 | View | What you can do |
 | --- | --- |
 | **1 Overview** | Inspect app identity, team, region, stack, URLs, formation, and latest release |
@@ -90,7 +96,7 @@ App actions:
 
 | Key | View | Action |
 | --- | --- | --- |
-| `s` | Resources | Scale the selected process row (`▸`); enter quantity and dyno size |
+| `s` | Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and dyno size |
 | `v` | Config | Reveal / hide the selected value |
 | `e` | Config | Replace the selected variable's value |
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
@@ -154,6 +160,8 @@ src/project.js         Git context and pipeline resolution
 src/api.js             Platform API reads, pagination, guarded writes
 src/ui/dashboard.js    Terminal navigation, prompts, refresh, lifecycle
 src/ui/views.js        View models, config masking, operational metrics
+src/ui/theme.js        Nerd Font icons, semantic colors, styled labels
+src/ui/text.js         Terminal-safe text sanitization
 src/demo.js            Offline demo data
 test/                  API, project, view, and keyboard integration tests
 scripts/               Explicit GET-only live and pseudo-terminal checks

@@ -186,3 +186,17 @@ test('Ctrl-C exits while a textbox has captured terminal input', async t => {
   assert.equal(d.closed, true)
   assert.equal(d.screen.destroyed, true)
 })
+
+test('styled config rows preserve literal tags and reject remote terminal escapes', async t => {
+  const {dashboard: d, screen, key} = await harness(t)
+  d.api.config = async () => ({TOKEN: '{red-fg}literal{/red-fg}\x1b[2Jsecret'})
+  await key('\r')
+  await key('4')
+  const visible = () => screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  assert.ok(!visible().includes('literal'))
+  await key('v')
+  assert.ok(visible().includes('{red-fg}literal{/red-fg}secret'))
+  assert.ok(!d.main.items[0].content.includes('\x1b[2J'))
+  await key('v')
+  assert.ok(!visible().includes('literal'))
+})
