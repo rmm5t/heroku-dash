@@ -3,6 +3,7 @@ import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import {errorMessage} from '../api.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
+import {detailContent, isValueClick} from './details.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, tabIcons} from './theme.js'
 
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
@@ -61,6 +62,11 @@ export class Dashboard {
       if (this.modal) return
       const selected = this.rows[this.main.getItemIndex(item)]
       if (selected?.kind === 'app') void this.openApp(selected.value)
+    })
+    this.detail.on('click', mouse => {
+      if (this.closed || this.modal || this.small.visible) return
+      const row = this.rows[this.main.selected]
+      if (this.revealed.has(row?.key) && isValueClick(this.detail, row, mouse)) void this.copyConfig()
     })
     this.nav.on('select', item => {
       if (this.modal) return
@@ -349,7 +355,7 @@ export class Dashboard {
   drawDetail() {
     const row = this.rows[this.main.selected]
     this.detail.setLabel(` ${icons[row?.icon] ?? icons.overview}  Details `)
-    this.detail.setContent(clean(row?.detail ?? ''))
+    this.detail.setContent(detailContent(row))
     this.detail.setScroll(0)
     this.render()
   }

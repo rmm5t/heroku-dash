@@ -6,6 +6,7 @@ import blessed from 'blessed'
 import {createDemo} from '../src/demo.js'
 import {Dashboard} from '../src/ui/dashboard.js'
 import {clean} from '../src/ui/text.js'
+import {palette} from '../src/ui/theme.js'
 
 async function harness(t, override = {}) {
   const input = new PassThrough()
@@ -18,7 +19,14 @@ async function harness(t, override = {}) {
   const dashboard = new Dashboard({...demo, ...override, screen, refresh: 0})
   t.after(() => { dashboard.close(); input.destroy(); output.destroy() })
   await dashboard.start()
-  return {dashboard, screen, input, async key(value) { input.write(value); await delay(15) }}
+  return {dashboard, screen, input,
+    async key(value) { input.write(value); await delay(15) },
+    async click(x, y, button = 'left') {
+      screen.program.emit('mouse', {x, y, button, action: 'mousedown'})
+      screen.program.emit('mouse', {x, y, button, action: 'mouseup'})
+      await delay(15)
+    },
+  }
 }
 
 test('keyboard opens pipeline apps and switches all app views', async t => {
@@ -135,6 +143,91 @@ test('y copies exact config values while masked, revealed, or empty in read-only
   await key('y')
   assert.deepEqual(copies, [value, value, ''])
   assert.equal(d.message, 'Copied ZEMPTY to clipboard.')
+})
+
+test('revealed detail values are cyan and only clicks on the value copy it', async t => {
+  const copies = []
+  const {dashboard: d, screen, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  d.api.config = async () => ({TOKEN: 'copy-this-value'})
+  await key('\r')
+  await key('4')
+  const x = d.detail.lpos.xi + d.detail.ileft
+  const top = d.detail.lpos.yi + d.detail.itop
+  await click(x + 1, top + 2) // Hidden value.
+  assert.deepEqual(copies, [])
+  await key('v')
+  assert.equal((screen.lines[top + 2][x][0] >> 9) & 0x1ff, blessed.colors.convert(palette.cyan))
+  assert.notEqual((screen.lines[top][x][0] >> 9) & 0x1ff, blessed.colors.convert(palette.cyan))
+  await click(x + 1, top + 2)
+  assert.deepEqual(copies, ['copy-this-value'])
+  assert.equal(d.message, 'Copied TOKEN to clipboard.')
+  await click(x, top) // Variable name.
+  await click(x, top + 1) // Blank separator.
+  await click(x, top + 4) // Instructions.
+  await click(x + 20, top + 2) // Space after the value.
+  await click(x - 1, top + 2) // Padding.
+  await click(d.detail.lpos.xi, top + 2) // Border.
+  await click(x, top + 2, 'right')
+  assert.equal(copies.length, 1)
+  await key('v')
+  await click(x, top + 2)
+  assert.equal(copies.length, 1)
+  await key('v')
+  await key('?')
+  await click(x, top + 2) // An open modal blocks copy actions.
+  assert.equal(copies.length, 1)
+})
+
+test('clicking wrapped and scrolled config values copies the full original after resizing', async t => {
+  const copies = []
+  const {dashboard: d, screen, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  const name = `LONG_${'CONFIG_KEY_'.repeat(15)}`
+  const value = `BEGIN\t${'界🔑e\u0301 '.repeat(150)}\nsecond line\n\x1b[31m{red-fg}literal{/red-fg}\n`
+  d.api.config = async () => ({[name]: value})
+  await key('\r')
+  await key('4')
+  await key('v')
+  for (const width of [140, 90]) {
+    screen.program.cols = width
+    screen.program.emit('resize')
+    d.detail.setScroll(6)
+    d.render()
+    const x = d.detail.lpos.xi + d.detail.ileft
+    const y = d.detail.lpos.yi + d.detail.itop
+    await click(x + 3, y)
+    assert.equal(copies.at(-1), value)
+    const previous = copies.length
+    await click(d.detail.lpos.xl - d.detail.iright - 1, y) // Scrollbar.
+    assert.equal(copies.length, previous)
+  }
+  assert.equal(copies.length, 2)
+  await key('1')
+  const x = d.detail.lpos.xi + d.detail.ileft
+  const y = d.detail.lpos.yi + d.detail.itop
+  await click(x + 3, y + 2)
+  assert.equal(copies.length, 2)
+})
+
+test('empty values and wide characters are clickable without including trailing space', async t => {
+  const copies = []
+  const {dashboard: d, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  d.api.config = async () => ({EMPTY: '', UNICODE: '界'})
+  await key('\r')
+  await key('4')
+  await key('v')
+  let x = d.detail.lpos.xi + d.detail.ileft
+  let y = d.detail.lpos.yi + d.detail.itop + 2
+  assert.ok(d.detail.content.includes('(empty value)'))
+  await click(x + 1, y)
+  assert.deepEqual(copies, [''])
+  d.main.select(1)
+  await key('v')
+  x = d.detail.lpos.xi + d.detail.ileft
+  y = d.detail.lpos.yi + d.detail.itop + 2
+  await click(x + 1, y) // Second cell of a double-width glyph.
+  assert.deepEqual(copies, ['', '界'])
+  await click(x + 2, y) // First cell after the glyph.
+  assert.equal(copies.length, 2)
 })
 
 test('y only copies an available config row and remains text inside prompts', async t => {

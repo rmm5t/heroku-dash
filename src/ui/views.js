@@ -75,8 +75,13 @@ export function appRows(tab, data, {config, configError, revealed = new Set()} =
     else if (!config) rows.push(row('Loading config vars…', 'Config vars are fetched only when you open this tab.', {icon: 'refresh', tone: 'info'}))
     else for (const key of Object.keys(config).sort()) {
       const visible = revealed.has(key)
+      const prefix = `${single(key)}\n\n`
+      const value = visible ? clean(config[key]) || '(empty value)' : 'Value hidden. Press v to reveal this variable.'
       rows.push(row(`${key} = ${visible ? single(config[key]) : '••••••••'}`,
-        `${key}\n\n${visible ? clean(config[key]) : 'Value hidden. Press v to reveal this variable.'}\n\n[y] copy value   [v] reveal / hide (this variable)\n[e] replace value   [n] new variable   [d] delete\nConfig changes create a release and restart the app.`, {kind: 'config', key, icon: visible ? 'eye' : 'lock', tone: visible ? 'warning' : 'cyan', emphasis: key}))
+        `${prefix}${value}\n\n${visible ? 'Click the highlighted value to copy it.\n' : ''}[y] copy value   [v] reveal / hide (this variable)\n[e] replace value   [n] new variable   [d] delete\nConfig changes create a release and restart the app.`, {
+          kind: 'config', key, icon: visible ? 'eye' : 'lock', tone: visible ? 'warning' : 'cyan', emphasis: key,
+          valueRange: visible ? {start: prefix.length, end: prefix.length + value.length} : undefined,
+        }))
     }
   }
   if (tab === 'Settings') {

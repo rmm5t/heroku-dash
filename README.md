@@ -116,7 +116,7 @@ Every write displays the target app and proposed change, then requires typing th
 
 Config values are fetched only when opening Config. Press `v` to reveal or hide the selected variable independently of the others. Moving between rows keeps revealed values visible, so you can inspect several at once. Switching views/apps or manually refreshing hides them all again. The plugin keeps fetched values in memory for the selected app and does not write config values to disk. Automatic refresh updates operational app data; use `R` to refresh config values.
 
-Press **`y`** to copy the selected variable's value without revealing it. Copying preserves the complete value, including whitespace, Unicode, and multiline content, and works in `--read-only` mode. The status bar confirms the variable name without displaying its value.
+Press **`y`** to copy the selected variable's value without revealing it. Revealed values appear in **cyan** in the Details pane; **click the highlighted value** to copy it. Clicking any wrapped or multiline portion copies the complete value. Empty values show a clickable `(empty value)` placeholder. Copying preserves whitespace, Unicode, and multiline content, and works in `--read-only` mode. The status bar confirms the variable name without displaying its value.
 
 Clipboard access uses the system clipboard on the machine running `dash` (macOS, Windows, or a Linux desktop). On Wayland, install `wl-clipboard`; X11 uses `xsel`, with a bundled fallback. A desktop clipboard must be accessible to the terminal; headless/SSH sessions without one show a copy error instead.
 
@@ -167,6 +167,7 @@ src/project.js         Git context and pipeline resolution
 src/api.js             Platform API reads, pagination, guarded writes
 src/ui/dashboard.js    Terminal navigation, prompts, refresh, lifecycle
 src/ui/views.js        View models, config masking, operational metrics
+src/ui/details.js      Highlighted values and scroll-aware click targets
 src/ui/theme.js        Nerd Font icons, semantic colors, styled labels
 src/ui/text.js         Terminal-safe text sanitization
 src/demo.js            Offline demo data
