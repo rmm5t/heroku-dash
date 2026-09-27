@@ -4,7 +4,7 @@ A keyboard-driven Heroku dashboard in your terminal, inspired by **gh-dash**.
 
 Run **`heroku dash`** inside a Git repository to open its Heroku pipeline. Browse teams, pipelines, and apps; inspect resources and settings; scale dynos; and manage config without leaving your terminal.
 
-<img src="docs/images/demo.png"/>
+<img src="docs/images/demo-overview.png" width="47%"/> <img src="docs/images/demo-resources.png" width="47%"/> <img src="docs/images/demo-config.png" width="47%"/> <img src="docs/images/demo-metrics.png" width="47%"/>
 
 ## Installation
 
