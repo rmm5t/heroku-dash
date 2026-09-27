@@ -4,6 +4,8 @@ A keyboard-driven Heroku dashboard in your terminal, inspired by **gh-dash**.
 
 Run **`heroku dash`** inside a Git repository to open its Heroku pipeline. Browse teams, pipelines, and apps; inspect resources and settings; scale dynos; and manage config without leaving your terminal.
 
+<img src="docs/images/demo.png"/>
+
 ## Installation
 
 Requires a current [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli), Node.js 22+, and an interactive terminal. The minimum terminal size is 80 × 24; 120 × 36 or larger is recommended.
