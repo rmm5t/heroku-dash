@@ -330,14 +330,18 @@ export class Dashboard {
 
   async openApp(app, pipeline = null) {
     this.clearApp()
+    const generation = this.generation
     this.app = app
     this.pipeline = pipeline
     this.breadcrumbTeam = app.team ?? null
-    this.tab = 0
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}\n\n${badge('refresh', 'Loading app data…', 'info')}`)
+    this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]} `)
     this.setRows([])
     this.main.focus()
-    await this.loadApp()
+    const loaded = await this.loadApp()
+    if (loaded && !this.closed && generation === this.generation && TABS[this.tab] === 'Config' && !this.config && !this.loading.has('config')) {
+      await this.loadConfig()
+    }
   }
 
   async loadApp(automatic = false, {forceResources = false} = {}) {

@@ -68,6 +68,8 @@ When remotes span multiple pipelines, the browser asks you to choose one. Use `-
 
 The left sidebar browses teams, pipelines, or apps. Choosing a team scopes its pipelines and apps; **All teams / personal** clears the scope. Pipelines list apps ordered by stage. Open an app to see its seven views, with a selectable resource list above a scrollable details pane.
 
+Switching apps keeps the selected tab, so moving from Metrics on one app opens Metrics on the next. The destination app's data loads automatically, including config vars and optional cost/limit details when those tabs are selected.
+
 Overview, Resources, Add-ons, Settings, and Metrics use aligned tables with fixed column headers and right-aligned quantities. Columns adapt to the terminal width; narrow layouts hide the Resources age and Add-ons service columns. Full values, including shortened names and hidden columns, remain available in Details.
 
 Resources groups dynos directly beneath their process type, with indented names in natural order (`web.1`, `web.2`, `web.10`). Active process groups (Qty > 0) appear first, followed by **Other dynos** for one-off and unmatched instances, then inactive process groups (Qty = 0) at the bottom. Each group's child dynos stay with their process. Select the process row to scale it, or a child dyno to inspect its details.

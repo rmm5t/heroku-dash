@@ -48,6 +48,62 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.rows[0].kind, 'app')
 })
 
+test('switching apps through the sidebar preserves every selected app tab', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('\r')
+  assert.equal(d.tab, 0)
+  for (let tab = 0; tab < 7; tab++) {
+    await key(String(tab + 1))
+    const next = d.app.id === d.catalog.apps[0].id ? 1 : 0
+    await key('a')
+    await key(next ? 'j' : 'k')
+    await key('\r')
+    assert.equal(d.app.id, d.catalog.apps[next].id)
+    assert.equal(d.tab, tab)
+    assert.ok(d.rows.length)
+    if (tab === 3) assert.ok(d.config, 'The new app config loads without reselecting Config')
+    if (tab === 6) assert.equal(d.telemetry.appId, d.app.id)
+  }
+  await d.back()
+  assert.equal(d.app, null)
+  await key('\r')
+  assert.equal(d.tab, 6, 'The remembered tab also survives a return through the pipeline')
+})
+
+test('preserving Config reloads the destination app, masks values, and ignores old config responses', async t => {
+  const {dashboard: d, key, screen} = await harness(t)
+  const oldConfig = Promise.withResolvers()
+  const newConfig = Promise.withResolvers()
+  const calls = []
+  d.api.config = async id => {
+    calls.push(id)
+    if (calls.length === 1) return {TOKEN: 'app-a-secret'}
+    return id === 'app-staging' ? oldConfig.promise : newConfig.promise
+  }
+  await key('\r')
+  await key('4')
+  await key('v')
+  assert.ok(d.detail.content.includes('app-a-secret'))
+  const oldLoading = d.loadConfig()
+  const opening = d.openApp(d.catalog.apps[1])
+  await delay(15)
+  assert.equal(d.tab, 3)
+  assert.equal(d.config, null)
+  assert.equal(d.revealed.size, 0)
+  assert.deepEqual(calls, ['app-staging', 'app-staging', 'app-production'])
+  const visible = () => screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+  assert.ok(!visible().includes('app-a-secret'))
+  oldConfig.resolve({TOKEN: 'late-app-a-secret'})
+  await oldLoading
+  assert.equal(d.config, null)
+  assert.ok(d.loading.has('config'))
+  newConfig.resolve({TOKEN: 'app-b-secret'})
+  await opening
+  assert.equal(d.config.TOKEN, 'app-b-secret')
+  assert.ok(!visible().includes('app-b-secret'))
+  assert.ok(!visible().includes('late-app-a-secret'))
+})
+
 test('direct pipeline and app-sidebar navigation show full parent breadcrumbs', async t => {
   const {dashboard: d, key} = await harness(t)
   assert.deepEqual(breadcrumbs(d), ['acme', 'constellation'])
@@ -784,7 +840,8 @@ test('late cost data from another app cannot overwrite the current resource deta
   await key('\r')
   await key('2')
   await d.openApp(d.catalog.apps[1])
-  await key('2')
+  assert.equal(d.tab, 1)
+  await delay(15)
   assert.match(d.detail.content, /\$100\.00\/month/)
   pending.resolve(costData(50))
   await delay(15)
@@ -835,7 +892,7 @@ test('old app telemetry is aborted and cannot replace the newly selected app', a
   await key('7')
   await d.openApp(d.catalog.apps[1])
   assert.equal(firstSignal.aborted, true)
-  await key('7')
+  assert.equal(d.tab, 6)
   pending.resolve(demoTelemetry(firstData))
   await delay(15)
   assert.equal(d.telemetry.appId, 'app-production')
