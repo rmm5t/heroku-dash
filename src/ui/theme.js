@@ -70,7 +70,10 @@ export function stateStyle(state) {
 }
 
 export function rowLabel(row, width = 90) {
-  const text = row.columns ? tableColumns(row.columns, Math.max(0, width - 4), row.columnLayout) : single(row.label)
+  const icon = icons[row.icon] ?? icons.overview
+  const nested = row.kind === 'dyno' && row.treeBranch && row.columns
+  const columns = nested ? [`${icon} ${single(row.value?.name)}`, ...row.columns.slice(1)] : row.columns
+  const text = columns ? tableColumns(columns, Math.max(0, width - 4), row.columnLayout) : single(row.label)
   const emphasis = row.emphasis ? single(row.emphasis) : ''
   let offset = emphasis ? text.indexOf(emphasis) : -1
   // A state such as "up" must highlight the state column, not "backup.1".
@@ -78,8 +81,12 @@ export function rowLabel(row, width = 90) {
     || (offset + emphasis.length < text.length && !/\s/.test(text[offset + emphasis.length])))) {
     offset = text.indexOf(emphasis, offset + 1)
   }
-  const label = offset < 0 ? text : `${text.slice(0, offset)}${paint(emphasis, row.tone)}${text.slice(offset + emphasis.length)}`
-  return ` ${paint(icons[row.icon] ?? icons.overview, row.tone ?? 'accent')}  ${label}`
+  let label = offset < 0 ? text : `${text.slice(0, offset)}${paint(emphasis, row.tone)}${text.slice(offset + emphasis.length)}`
+  if (nested) {
+    label = label.replace(icon, paint(icon, row.tone ?? 'accent'))
+    return ` ${paint(row.treeBranch, 'muted')} ${label}`
+  }
+  return ` ${paint(icon, row.tone ?? 'accent')}  ${label}`
 }
 
 export function shortcut(key, description) {

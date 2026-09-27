@@ -654,12 +654,12 @@ test('cost enrichment is lazy, preserves selection and scroll, and refreshes wit
   await key('2')
   assert.equal(calls.length, 1)
   assert.match(clean(d.status.content), /Loading dyno costs/)
-  await key('j')
+  d.main.select(d.rows.findIndex(row => row.id === 'formation:worker'))
   d.detail.setContent(Array.from({length: 40}, (_, i) => `Detail ${i}`).join('\n'))
   d.detail.setScroll(3)
   pending.resolve(costData(50))
   await delay(15)
-  assert.equal(d.main.selected, 1)
+  assert.equal(d.rows[d.main.selected].id, 'formation:worker')
   assert.equal(d.detail.childBase, 3)
   assert.match(d.detail.content, /\$50\.00\/month/)
   await key('3')
@@ -670,6 +670,37 @@ test('cost enrichment is lazy, preserves selection and scroll, and refreshes wit
   assert.equal(calls.length, 3)
   assert.equal(calls.at(-1)[2], true)
   assert.match(d.detail.content, /\$75\.00\/month/)
+})
+
+test('grouped dynos cannot be scaled directly and resource selection survives refresh reordering', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  demo.api.scale = async () => assert.fail('No scaling should be submitted')
+  const {dashboard: d, key} = await harness(t, demo)
+  await key('\r')
+  await key('2')
+  await key('j')
+  assert.equal(d.rows[d.main.selected].id, 'dyno:web.1')
+  await key('s')
+  assert.ok(!d.modal)
+  assert.match(d.message, /Select a process type/)
+  await key('j')
+  await key('j')
+  assert.equal(d.rows[d.main.selected].id, 'formation:worker')
+  await key('s')
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /constellation-staging \/ worker/)
+  await key('\x1b')
+  await delay(50)
+  const original = d.api.appData
+  d.api.appData = async id => {
+    const data = await original(id)
+    data.dynos.push({...data.dynos[0], name: 'web.3'})
+    return data
+  }
+  await d.loadApp()
+  assert.equal(d.main.selected, 4)
+  assert.equal(d.rows[d.main.selected].id, 'formation:worker')
+  assert.match(d.detail.content, /Process\s+worker/)
 })
 
 test('failed optional cost lookup does not block the app and can be retried', async t => {

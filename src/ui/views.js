@@ -54,9 +54,10 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
       'Use Resources to inspect and scale process types.\nUse Add-ons to inspect plans and attachments.\nConfig values are masked until explicitly revealed.', {
         icon: 'resources', columns: ['Total dynos', errors.addons ? 'Add-ons unavailable' : `${addons.length} add-ons`, errors.formation ? '—' : formation.reduce((n, f) => n + f.quantity, 0), errors.formation ? 'Unavailable' : 'Configured'],
       }))
-    for (const f of formation) rows.push(row(`${f.type}  ·  ${f.quantity} × ${f.size}`, lines([
+    const orderedFormation = [...formation].sort((a, b) => Number(b.quantity > 0) - Number(a.quantity > 0))
+    for (const f of orderedFormation) rows.push(row(`${f.type}  ·  ${f.quantity} × ${f.size}`, lines([
       ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
-    ]), {icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', columns: [f.type, f.size, f.quantity, f.quantity ? 'Configured' : 'Scaled to 0']}))
+    ]), {id: `overview:formation:${f.type}`, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', columns: [f.type, f.size, f.quantity, f.quantity ? 'Configured' : 'Scaled to 0']}))
     if (releases[0]) rows.push(row(`Latest release: v${releases[0].version}  ·  ${releases[0].status}`, releases[0].description, {
       ...stateStyle(releases[0].status), emphasis: releases[0].status, columns: ['Latest release', `v${releases[0].version}`, '—', releases[0].status],
     }))
@@ -64,16 +65,42 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
   }
   if (tab === 'Resources') {
     error('formation'); error('dynos')
-    for (const f of formation) rows.push(row(`${f.type.padEnd(16)} ${String(f.quantity).padStart(3)} × ${f.size}    [s] scale`, lines([
-      ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
-      ['Updated', f.updated_at], ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
-    ]) + dynoDetails(resources, 'formations', f.type), {kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type,
-      columns: [f.type, f.size, f.quantity, '[s] scale', '—']}))
-    for (const d of dynos) rows.push(row(`  ${d.name.padEnd(20)} ${d.state.padEnd(10)} ${d.size}  ·  ${age(d.created_at)}`, lines([
-      ['Dyno', d.name], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
-      ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command],
-    ]) + dynoDetails(resources, 'instances', d.name), {...stateStyle(d.state), emphasis: d.state,
-      columns: [d.name, d.size, '—', d.state, age(d.created_at)]}))
+    const byType = new Map()
+    for (const dyno of dynos) {
+      if (!byType.has(dyno.type)) byType.set(dyno.type, [])
+      byType.get(dyno.type).push(dyno)
+    }
+    const appendDynos = members => {
+      const sorted = [...members].sort((a, b) => a.name.localeCompare(b.name, 'en', {numeric: true}))
+      for (const [index, d] of sorted.entries()) {
+        const treeBranch = index === sorted.length - 1 ? '└─' : '├─'
+        const name = `  ${treeBranch} ${d.name}`
+        rows.push(row(`${name}  ${d.state}  ${d.size}  ·  ${age(d.created_at)}`, lines([
+          ['Dyno', d.name], ['Process', d.type], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
+          ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command],
+        ]) + dynoDetails(resources, 'instances', d.name), {id: `dyno:${d.name}`, kind: 'dyno', value: d, treeBranch, ...stateStyle(d.state), emphasis: d.state,
+          columns: [name, d.size, '—', d.state, age(d.created_at)]}))
+      }
+    }
+    const appendProcess = f => {
+      rows.push(row(`${f.type.padEnd(16)} ${String(f.quantity).padStart(3)} × ${f.size}    [s] scale`, lines([
+        ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
+        ['Updated', f.updated_at], ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
+      ]) + dynoDetails(resources, 'formations', f.type), {id: `formation:${f.type}`, kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type,
+        columns: [f.type, f.size, f.quantity, '[s] scale', '—']}))
+      appendDynos(byType.get(f.type) ?? [])
+    }
+    // Preserve the existing order within each partition and keep child dynos
+    // with their process, including lingering dynos on a scaled-to-zero type.
+    for (const f of formation.filter(f => f.quantity > 0)) appendProcess(f)
+    const types = new Set(formation.map(f => f.type))
+    const unmatched = dynos.filter(dyno => !types.has(dyno.type))
+    if (unmatched.length) {
+      rows.push(row('Other dynos', 'Dynos without a matching process in the formation snapshot.\nThis includes one-off runs, and can also occur when formation details are unavailable.\n\nSelect an individual dyno to inspect its state, command, and size.',
+        {id: 'group:other-dynos', kind: 'group', icon: 'resources', tone: 'muted', columns: ['Other dynos', 'No formation match', unmatched.length, '—', '—']}))
+      appendDynos(unmatched)
+    }
+    for (const f of formation.filter(f => !(f.quantity > 0))) appendProcess(f)
   }
   if (tab === 'Add-ons') {
     error('addons'); error('attachments')

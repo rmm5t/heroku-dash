@@ -66,9 +66,66 @@ test('resource details distinguish process estimates, per-dyno rates, Eco, and u
   assert.match(rows[0].detail, /1 GB/)
   assert.match(rows[0].detail, /\$50\.00\/month for this process/)
   assert.match(rows[0].detail, /\$25\.00\/dyno\/month/)
-  assert.match(rows[1].detail, /Estimated cost\s+Unavailable/)
-  assert.match(rows[2].detail, /Shared \$5\/month account plan/)
-  assert.ok(!rows[2].detail.includes('$0.00'))
+  assert.match(rows.find(row => row.id === 'formation:worker').detail, /Estimated cost\s+Unavailable/)
+  const instance = rows.find(row => row.id === 'dyno:web.1')
+  assert.match(instance.detail, /Shared \$5\/month account plan/)
+  assert.ok(!instance.detail.includes('$0.00'))
+})
+
+test('Resources nests naturally sorted dynos under their process, retaining zero-scale and unmatched entries', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  const base = data.dynos[0]
+  data.formation.push({type: 'scheduler', quantity: 0, size: 'Basic'})
+  data.dynos = [
+    {...base, name: 'run.9', type: 'run'}, {...base, name: 'web.10', size: 'Basic'},
+    {...base, name: 'worker.1', type: 'worker', state: 'crashed'},
+    {...base, name: 'web.2'}, {...base, name: 'web.1'},
+  ]
+  const rows = appRows('Resources', data)
+  assert.deepEqual(rows.map(row => row.id), [
+    'formation:web', 'dyno:web.1', 'dyno:web.2', 'dyno:web.10',
+    'formation:worker', 'dyno:worker.1', 'group:other-dynos', 'dyno:run.9', 'formation:scheduler',
+  ])
+  assert.equal(rows[1].columns[0], '  ├─ web.1')
+  assert.equal(rows[3].columns[0], '  └─ web.10')
+  assert.equal(rows[3].columns[1], 'Basic', 'Dynos group by process type, even with a different size during a deploy')
+  assert.equal(rows[5].columns[0], '  └─ worker.1')
+  assert.equal(rows[5].columns[3], 'crashed')
+  assert.equal(rows[8].columns[2], 0)
+  assert.equal(rows[7].kind, 'dyno')
+  assert.match(rows[7].detail, /Process\s+run/)
+})
+
+test('Overview and Resources place active processes first without changing formation order', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  const [web, worker] = data.formation
+  data.formation = [{type: 'idle-a', quantity: 0, size: 'Basic'}, worker, {type: 'idle-b', quantity: 0, size: 'Basic'}, web]
+  const original = [...data.formation]
+  data.dynos.push({...data.dynos[0], type: 'idle-a', name: 'idle-a.1'}, {...data.dynos[0], type: 'run', name: 'run.3'})
+  const rows = appRows('Resources', data)
+  assert.deepEqual(rows.map(row => row.id), [
+    'formation:worker', 'dyno:worker.1',
+    'formation:web', 'dyno:web.1', 'dyno:web.2',
+    'group:other-dynos', 'dyno:run.3',
+    'formation:idle-a', 'dyno:idle-a.1', 'formation:idle-b',
+  ])
+  const overview = appRows('Overview', data)
+  assert.deepEqual(overview.filter(row => row.id?.startsWith('overview:formation:')).map(row => row.columns[0]),
+    ['worker', 'web', 'idle-a', 'idle-b'])
+  assert.deepEqual(data.formation, original)
+})
+
+test('Resources keeps dynos visible when the formation cannot be loaded', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  data.formation = []
+  data.errors.formation = 'Permission denied'
+  const rows = appRows('Resources', data)
+  assert.match(rows[0].detail, /Permission denied/)
+  assert.equal(rows[1].id, 'group:other-dynos')
+  assert.equal(rows.filter(row => row.kind === 'dyno').length, data.dynos.length)
 })
 
 test('add-on details show billed price, active limits, shared ownership, and pending changes', async () => {
