@@ -7,9 +7,12 @@ const valid = value => Number.isFinite(value) && value >= 0
 
 function ceiling(value) {
   if (value <= 0) return 1
-  const power = 10 ** Math.floor(Math.log10(value))
-  const step = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(step => step * power >= value)
-  const upper = (step ?? 10) * power
+  // Decimal parsing rounds each boundary once. Multiplying by 10 ** exponent
+  // can put an exact boundary one ULP below the input on some Node versions
+  // (e.g. 4 * 10 ** -5 on Node 22), incorrectly advancing to the next step.
+  const exponent = value.toExponential().split('e')[1]
+  const upper = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]
+    .map(step => Number(`${step}e${exponent}`)).find(boundary => boundary >= value)
   return Number.isFinite(upper) ? upper : value
 }
 

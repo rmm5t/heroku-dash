@@ -70,7 +70,33 @@ test('constant and tiny values have a valid scale and do not get reported as zer
   assert.equal(metricNumber(0.00004), '0.00004')
   assert.equal(metricValue(0, 'bytes'), '0 MiB')
   assert.equal(metricValue(null, 'bytes'), '—')
-  assert.match(clean(metricChartLines(chart([0.00003, 0.00004], {unit: ''})).join('\n')), /0\.00004/)
+  const tiny = chart([0.00003, 0.00004], {unit: ''})
+  assert.equal(chartModel(tiny, 10, 5).upper, 0.00004)
+  assert.match(clean(metricChartLines(tiny)[0]), /^\s*0\.00004\s+│/)
+})
+
+test('exact decimal scale boundaries are stable across magnitudes', () => {
+  for (const value of [1e-12, 1.5e-8, 2e-7, 2.5e-6, 0.00003, 0.00004, 0.00006, 0.00008, 0.0001, 0.0015, 0.025, 0.3, 0.6, 1, 1.5, 2.5, 40, 600, 2500, 4e12]) {
+    assert.equal(chartModel(chart([value]), 10, 5).upper, value, `Exact boundary ${value}`)
+  }
+})
+
+test('values above a scale boundary still round the axis upward without rounding the data', () => {
+  for (const [value, expected] of [[0.000039, 0.00004], [0.00004000000000000001, 0.00005], [0.000041, 0.00005], [0.1501, 0.2], [2.5001, 3], [600.01, 800]]) {
+    const model = chartModel(chart([value]), 10, 5)
+    assert.equal(model.upper, expected)
+    assert.ok(model.upper >= value)
+    assert.equal(model.latest.value, value)
+  }
+})
+
+test('scale boundaries stay positive and finite at numeric extremes', () => {
+  for (const value of [Number.MIN_VALUE, 1e-323, 1e-308, 1e308, Number.MAX_VALUE]) {
+    const model = chartModel(chart([value]), 10, 5)
+    assert.ok(Number.isFinite(model.upper))
+    assert.ok(model.upper >= value)
+    assert.ok(model.upper > 0)
+  }
 })
 
 test('chart lines fit narrow and wide panes and show UTC times across midnight', () => {
