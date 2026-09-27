@@ -48,8 +48,8 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.rows[0].kind, 'app')
 })
 
-test('selection highlights follow keyboard and mouse focus with one purple marker', async t => {
-  const {dashboard: d, screen, key, click} = await harness(t)
+for (const theme of ['dark', 'light']) test(`${theme} selection highlights follow keyboard and mouse focus with one purple marker`, async t => {
+  const {dashboard: d, screen, key, click} = await harness(t, {theme})
   const assertSelections = focused => {
     for (const list of [d.nav, d.main]) {
       const active = list === focused
@@ -79,6 +79,34 @@ test('selection highlights follow keyboard and mouse focus with one purple marke
   await click(xi, yi)
   assert.equal(d.app.id, app.id)
   assertSelections(d.main)
+})
+
+test('light theme covers app views, config values, charts, and input prompts', async t => {
+  const {dashboard: d, screen, key} = await harness(t, {theme: 'light'})
+  assert.equal(d.theme, 'light')
+  const background = blessed.colors.convert(palette.bg)
+  for (const pane of [d.nav, d.main, d.summary, d.detail]) assert.equal(pane.style.bg, palette.bg)
+  await key('\r')
+  for (let tab = 1; tab <= 7; tab++) {
+    await key(String(tab))
+    const {xi, yi} = d.detail.lpos
+    assert.equal(screen.lines[yi + d.detail.itop][xi + d.detail.ileft][0] & 0x1ff, background)
+  }
+  assert.ok(d.detail.content.includes(`\x1b[38;5;${blessed.colors.convert(palette.cyan)}m`), 'Charts use the light palette')
+  await key('4')
+  await key('v')
+  assert.ok(d.detail.content.includes(`\x1b[38;5;${blessed.colors.convert(palette.cyan)}m`), 'Revealed values use readable teal')
+  const unselected = d.main.items[1].lpos
+  assert.equal(screen.lines[unselected.yi][unselected.xi][0] & 0x1ff, background, 'Unselected rows have an explicit light background')
+  await key('/')
+  assert.equal(d.modal.style.bg, palette.bg)
+  const input = d.modal.children.find(child => child.type === 'textbox')
+  assert.equal(input.style.bg, palette.bg)
+  assert.equal(input.style.fg, palette.fg)
+  await key('\x1b')
+  await key('?')
+  assert.equal(d.modal.style.bg, palette.bg)
+  await key('q')
 })
 
 test('switching apps through the sidebar preserves every selected app tab', async t => {

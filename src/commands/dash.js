@@ -22,6 +22,7 @@ export default class Dash extends Command {
     'read-only': Flags.boolean({description: 'Disable all remote changes', default: false}),
     refresh: Flags.integer({description: 'Refresh current app every N seconds (0 disables)', default: 30, min: 0}),
     demo: Flags.boolean({description: 'Explore an offline demo; no Heroku requests', default: false}),
+    theme: Flags.string({description: 'Color theme (auto detects the terminal background)', options: ['auto', 'light', 'dark'], default: 'auto'}),
   }
 
   async run() {
@@ -31,7 +32,7 @@ export default class Dash extends Command {
     const {runDashboard} = await import('../ui/dashboard.js')
     if (flags.demo) {
       const {createDemo} = await import('../demo.js')
-      return runDashboard({...createDemo(), refresh: flags.refresh, demo: true})
+      return runDashboard({...createDemo(), refresh: flags.refresh, demo: true, theme: flags.theme})
     }
     if (!await this.heroku.getAuth()) this.error('Log in with heroku login before opening dash.')
     // Interactive reauthentication must not take over the full-screen terminal.
@@ -44,6 +45,6 @@ export default class Dash extends Command {
       if (!context.team) this.error(`Team not found: ${flags.team}`)
     }
     const resources = await loadResourcesIntegration(this.config, api)
-    await runDashboard({api, catalog, context, resources, refresh: flags.refresh})
+    await runDashboard({api, catalog, context, resources, refresh: flags.refresh, theme: flags.theme})
   }
 }

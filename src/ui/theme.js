@@ -2,12 +2,28 @@ import blessed from 'blessed'
 import {clean, single} from './text.js'
 import {tableColumns} from './columns.js'
 
-export const palette = {
-  bg: '#161b22', panel: '#1c212b', fg: '#c9d1d9', muted: '#8b949e',
-  accent: '#bc8cff', border: '#484f58', selected: '#3a3a3a', selectedFg: '#eeeeee',
-  selectedInactive: '#262626', selectedInactiveFg: '#bcbcbc', selectionMarker: '#af87ff',
-  success: '#7ee787', warning: '#e3b341', error: '#ff7b72', info: '#79c0ff', cyan: '#76e3ea',
-  loadingTrail: '#916bbb', loadingFade: '#5e467e', loadingDim: '#362b48',
+export const palettes = {
+  dark: {
+    bg: '#161b22', panel: '#1c212b', fg: '#c9d1d9', muted: '#8b949e',
+    accent: '#bc8cff', border: '#484f58', selected: '#3a3a3a', selectedFg: '#eeeeee',
+    selectedInactive: '#262626', selectedInactiveFg: '#bcbcbc', selectionMarker: '#af87ff',
+    success: '#7ee787', warning: '#e3b341', error: '#ff7b72', info: '#79c0ff', cyan: '#76e3ea',
+    loadingTrail: '#916bbb', loadingFade: '#5e467e', loadingDim: '#362b48',
+  },
+  light: {
+    bg: '#fafafa', panel: '#eeeeee', fg: '#303030', muted: '#626262',
+    accent: '#5f0087', border: '#a8a8a8', selected: '#d7d7d7', selectedFg: '#262626',
+    selectedInactive: '#eeeeee', selectedInactiveFg: '#626262', selectionMarker: '#5f0087',
+    success: '#005f00', warning: '#875f00', error: '#af0000', info: '#005faf', cyan: '#005f5f',
+    loadingTrail: '#875faf', loadingFade: '#af87af', loadingDim: '#d7d7df',
+  },
+}
+
+// Choose once at startup, before creating widgets or their ANSI-styled content.
+export let palette = palettes.dark
+export function setTheme(name) {
+  if (!Object.hasOwn(palettes, name)) throw new Error(`Unknown theme: ${name}`)
+  palette = palettes[name]
 }
 
 // Nerd Fonts' BMP glyphs stay one terminal cell wide with a Nerd Font Mono.

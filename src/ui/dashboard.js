@@ -7,16 +7,19 @@ import {fetchTelemetry, metricsScope} from '../metrics.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
-import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
+import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
+import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 
 const SIDEBAR_WIDTH = '22%'
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
+const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
 
 export class Dashboard {
-  constructor({api, catalog, context, resources = null, refresh = 30, demo = false, screen, writeClipboard = clipboard.write,
+  constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
     fetchMetrics = (data, options) => fetchTelemetry(api, data, options)}) {
-    Object.assign(this, {api, catalog, context, resources, refresh, demo, writeClipboard, fetchMetrics})
-    this.screen = screen ?? blessed.screen({smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
+    setTheme(theme)
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics})
+    this.screen = screen ?? createScreen()
     this.tab = 0
     this.mode = 'pipelines'
     this.team = context.team ?? null
@@ -55,11 +58,11 @@ export class Dashboard {
     const parent = this.screen
     this.header = blessed.box({parent, top: 0, height: 3, left: 0, right: 0, padding: {left: 2}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
     this.nav = blessed.list({parent, top: 3, bottom: 4, left: 0, width: SIDEBAR_WIDTH, ...frame(), label: ` ${icons.pipelines}  Pipelines `, keys: true, mouse: true, tags: false,
-      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bold: true}, item: {fg: palette.fg}}})
+      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bold: true}, item: {fg: palette.fg, bg: palette.bg}}})
     this.tabs = blessed.box({parent, top: 3, height: 3, left: SIDEBAR_WIDTH, right: 0, ...frame(), padding: {left: 1}, style: {...frame().style, fg: palette.accent}})
     this.summary = blessed.box({parent, top: 6, height: 5, left: SIDEBAR_WIDTH, right: 0, padding: {left: 2, right: 1}, style: {fg: palette.fg, bg: palette.bg}})
     this.main = blessed.list({parent, top: 11, height: '40%-4', left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.apps}  Apps `, keys: true, mouse: true, tags: false,
-      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, item: {fg: palette.fg}}})
+      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, item: {fg: palette.fg, bg: palette.bg}}})
     for (const list of [this.nav, this.main]) styleListSelection(list)
     this.columnHeader = blessed.box({parent: this.main, top: -1, left: 0, right: 1, height: 1, fixed: true, hidden: true, tags: false, autoFocus: false,
       style: {fg: palette.muted, bg: palette.panel, bold: true}})
@@ -790,16 +793,29 @@ export class Dashboard {
 }
 
 export async function runDashboard(options) {
-  const dashboard = new Dashboard(options)
-  const finished = new Promise(resolve => dashboard.screen.once('destroy', resolve))
-  const stop = () => dashboard.close()
+  const input = !options.screen && (options.theme ?? 'auto') === 'auto' ? new ThemeInput(process.stdin) : null
+  const screen = options.screen ?? createScreen(input ?? undefined)
+  const controller = new AbortController()
+  let dashboard
+  const finished = new Promise(resolve => screen.once('destroy', () => { controller.abort(); resolve() }))
+  const stop = () => { controller.abort(); if (dashboard) dashboard.close(); else screen.destroy() }
+  const startupKey = (_ch, key) => { if (key.full === 'C-c' || key.full === 'q') stop() }
+  // Enable raw input while detecting the theme and allow immediate cancellation.
+  screen.on('keypress', startupKey)
   process.once('SIGTERM', stop)
   process.once('SIGINT', stop)
   try {
+    const theme = await detectTerminalTheme({input: screen.program.input, output: screen.program.output,
+      theme: options.theme, signal: controller.signal})
+    if (screen.destroyed) return
+    screen.removeListener('keypress', startupKey)
+    dashboard = new Dashboard({...options, screen, theme})
     await dashboard.start()
     await finished
   } finally {
-    dashboard.close()
+    if (dashboard) dashboard.close()
+    else if (!screen.destroyed) screen.destroy()
+    input?.destroy()
     process.removeListener('SIGTERM', stop)
     process.removeListener('SIGINT', stop)
   }

@@ -54,6 +54,22 @@ heroku dash --refresh 0                # Manual refresh only
 
 `--app`, `--pipeline`, `--remote`, and `--team` are mutually exclusive. The default refresh interval is 30 seconds; nonzero intervals must be at least 10 seconds.
 
+### Color themes
+
+Dash automatically chooses a **light or dark theme** from your terminal's background color at startup. It queries the terminal using OSC 11, waits up to 200 ms, and falls back to `COLORFGBG` when available. If the background cannot be determined, it uses the dark theme.
+
+Both themes include matching panels, selections, prompts, status colors, and metric charts. Light mode uses dark text on pale backgrounds with deeper purple and semantic colors for contrast. Focused selections keep the purple marker; unfocused selections are dimmed.
+
+Use `--theme` to override detection, including in the offline demo:
+
+```sh
+heroku dash --theme light
+heroku dash --theme dark
+heroku dash --demo --theme light
+```
+
+`--theme auto` is the default. Restart dash after changing your terminal's color palette to detect it again.
+
 ### Repository detection
 
 1. Explicit flags take precedence.
@@ -78,7 +94,7 @@ The heading shows the resource hierarchy: **team › pipeline › app**, includi
 
 Nerd Font icons identify teams, pipelines, apps, process types, databases, and the app views. **Green** indicates healthy/successful states, **amber** indicates pending states or maintenance, **red** indicates failures, and **gray** indicates inactive or unknown states. Config rows use a lock for masked values and an amber eye for revealed values. Status text remains visible alongside icons and colors.
 
-Pipeline stages are color-coded: **blue** development, **purple** review, **amber** staging, and **green** production. The active view and focused pane use Heroku purple. Focused selections use soft-white text on charcoal with a slim purple marker; unfocused selections dim to muted text on darker gray. On narrower terminals, inactive tabs show their number and icon; the active tab keeps its name.
+Pipeline stages are color-coded: **blue** development, **purple** review, **amber** staging, and **green** production. The active view and focused pane use Heroku purple. Focused selections use a slim purple marker, with soft-white text on charcoal in dark mode or dark text on light gray in light mode. Unfocused selections are dimmed. On narrower terminals, inactive tabs show their number and icon; the active tab keeps its name.
 
 While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweeps back and forth in the status bar, with a fading trail and a brief pause at each turn. It updates every 40 ms alongside the operation in progress. It covers pipeline/app loads, config vars, workspace refreshes, and confirmed changes, and stops when the work finishes.
 
@@ -297,7 +313,8 @@ src/ui/views.js        View models, config masking, operational metrics
 src/ui/resource-details.js  Cost and capacity details and billing annotations
 src/ui/telemetry.js     Performance metric rows, sparklines, and sample details
 src/ui/details.js      Highlighted values and scroll-aware click targets
-src/ui/theme.js        Nerd Font icons, semantic colors, styled labels
+src/ui/theme.js        Light/dark palettes, Nerd Font icons, and styled labels
+src/ui/terminal-theme.js  Terminal background detection and response filtering
 src/ui/text.js         Terminal-safe text sanitization
 src/demo.js            Offline demo data
 test/                  API, project, view, and keyboard integration tests
