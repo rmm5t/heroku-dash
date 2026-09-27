@@ -13,6 +13,7 @@ import time
 parser = argparse.ArgumentParser()
 parser.add_argument('--repo', help='Repository for a live read-only check; omit for offline demo')
 parser.add_argument('--resources', action='store_true', help='Also verify companion costs in a live pipeline with dynos and add-ons')
+parser.add_argument('--metrics', action='store_true', help='Also verify numeric telemetry in a pipeline with recent traffic')
 args = parser.parse_args()
 if args.resources and not args.repo:
     parser.error('--resources requires --repo')
@@ -60,7 +61,10 @@ try:
     send(b'\r')
     wait_for('configured dynos')
     send(b'7')
-    wait_for('Dyno health')
+    wait_for('Throughput')
+    if args.metrics:
+        wait_for('rpm')
+        wait_for('MiB')
     send(b'?')
     wait_for('Keyboard shortcuts')
     send(b'?')
@@ -85,7 +89,7 @@ try:
             except OSError:
                 break
     assert process.wait(timeout=1) == 0
-    print(f'PASS: {"live read-only" if args.repo else "offline demo"} TTY startup, app navigation, metrics, help, write blocking, {"companion cost details, " if args.resources else ""}and clean exit')
+    print(f'PASS: {"live read-only" if args.repo else "offline demo"} TTY startup, app navigation, metrics, help, write blocking, {"numeric telemetry, " if args.metrics else ""}{"companion cost details, " if args.resources else ""}and clean exit')
 finally:
     if process.poll() is None:
         process.terminate()

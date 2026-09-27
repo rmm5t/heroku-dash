@@ -3,6 +3,7 @@ import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import {errorMessage} from '../api.js'
 import {resolveHierarchy} from '../hierarchy.js'
+import {fetchTelemetry, metricsScope} from '../metrics.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
@@ -12,8 +13,9 @@ const SIDEBAR_WIDTH = '22%'
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 
 export class Dashboard {
-  constructor({api, catalog, context, resources = null, refresh = 30, demo = false, screen, writeClipboard = clipboard.write}) {
-    Object.assign(this, {api, catalog, context, resources, refresh, demo, writeClipboard})
+  constructor({api, catalog, context, resources = null, refresh = 30, demo = false, screen, writeClipboard = clipboard.write,
+    fetchMetrics = (data, options) => fetchTelemetry(api, data, options)}) {
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, writeClipboard, fetchMetrics})
     this.screen = screen ?? blessed.screen({smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
     this.tab = 0
     this.mode = 'pipelines'
@@ -30,6 +32,11 @@ export class Dashboard {
     this.resourceData = {}
     this.resourceErrors = {}
     this.resourceRequests = new Map()
+    this.telemetry = null
+    this.metricsError = null
+    this.metricsRequest = null
+    this.metricsSignature = null
+    this.metricsRequestedAt = 0
     this.revealed = new Set()
     this.copying = false
     this.busy = false
@@ -255,6 +262,7 @@ export class Dashboard {
 
   clearApp() {
     this.generation++
+    this.resetMetrics()
     this.resetResourceDetails()
     for (const key of ['app', 'pipeline', 'config']) this.loading.delete(key)
     this.syncLoadingAnimation()
@@ -344,10 +352,12 @@ export class Dashboard {
       this.resetResourceDetails()
       this.data = data
       this.app = data.app
+      if (this.metricsSignature && this.metricsSignature !== metricsScope(data)) this.resetMetrics()
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
       this.messageTone = Object.keys(data.errors).length ? 'warning' : 'success'
-      this.drawApp()
+      this.drawApp({preserveScroll: automatic && TABS[this.tab] === 'Metrics'})
       void this.loadResourceDetails({force: forceResources})
+      void this.loadMetrics({refresh: true, force: !automatic})
       return true
     } catch (error) {
       if (generation === this.generation) {
@@ -362,15 +372,58 @@ export class Dashboard {
     }
   }
 
-  drawApp() {
+  drawApp({preserveScroll = false} = {}) {
     if (!this.data) return
+    const scroll = this.detail.childBase
     const {app, formation, errors} = this.data
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', `${this.data.addons.length} add-ons`, 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
     this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]} `)
     this.setRows(appRows(TABS[this.tab], this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
+      metrics: {snapshot: this.telemetry, error: this.metricsError},
     }), true)
+    if (preserveScroll) { this.detail.setScroll(scroll); this.render() }
+  }
+
+  resetMetrics() {
+    this.metricsRequest?.controller.abort()
+    this.metricsRequest = null
+    this.telemetry = null
+    this.metricsError = null
+    this.metricsSignature = null
+    this.metricsRequestedAt = 0
+    this.loading.delete('metrics')
+    this.syncLoadingAnimation()
+  }
+
+  async loadMetrics({refresh = false, force = false} = {}) {
+    if (TABS[this.tab] !== 'Metrics' || !this.data || this.closed) return
+    const signature = metricsScope(this.data)
+    if (this.metricsRequest && !force) return
+    if (!force && !refresh && this.metricsSignature === signature && Date.now() - this.metricsRequestedAt < 30_000) return
+    this.metricsRequest?.controller.abort()
+    const request = {controller: new AbortController()}
+    const generation = this.generation
+    this.metricsRequest = request
+    this.metricsSignature = signature
+    this.metricsRequestedAt = Date.now()
+    this.metricsError = null
+    const current = () => !this.closed && generation === this.generation && this.metricsRequest === request && !request.controller.signal.aborted
+    const finishLoading = this.beginLoading('metrics', 'Loading performance metrics…')
+    try {
+      const snapshot = await this.fetchMetrics(this.data, {signal: request.controller.signal})
+      if (!current()) return
+      this.telemetry = snapshot
+    } catch (error) {
+      if (current()) this.metricsError = errorMessage(error)
+    } finally {
+      if (current()) {
+        this.metricsRequest = null
+        if (TABS[this.tab] === 'Metrics') this.drawApp({preserveScroll: true})
+      }
+      finishLoading()
+    }
   }
 
   resetResourceDetails() {
@@ -416,7 +469,9 @@ export class Dashboard {
   }
 
   setRows(rows, preserve = false) {
-    const selected = preserve ? this.main.selected : 0
+    const previous = this.rows[this.main.selected]
+    const matching = preserve && previous?.id ? rows.findIndex(row => row.id === previous.id) : -1
+    const selected = preserve ? matching >= 0 ? matching : this.main.selected : 0
     // Blessed's setItems temporarily selects row zero. Ignore those synthetic
     // selection events until the intended row is restored, so details aren't
     // rendered for a temporary selection or a partially updated list.
@@ -465,6 +520,7 @@ export class Dashboard {
     this.drawApp()
     if (TABS[index] === 'Config' && !this.config) void this.loadConfig()
     void this.loadResourceDetails()
+    void this.loadMetrics()
   }
 
   async loadConfig() {
@@ -680,7 +736,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics show dyno health and recent deployment outcomes.\nMemory / CPU / latency charts require the web dashboard.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  Esc             Return to pipeline / workspace; clear filter\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R               Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected Resources process type\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
@@ -690,6 +746,9 @@ export class Dashboard {
   close() {
     if (this.closed) return
     this.closed = true
+    this.metricsRequest?.controller.abort()
+    this.metricsRequest = null
+    this.telemetry = null
     clearInterval(this.timer)
     this.loading.clear()
     this.syncLoadingAnimation()

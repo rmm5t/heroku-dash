@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {createDemo} from '../src/demo.js'
+import {createDemo, demoTelemetry} from '../src/demo.js'
 import {appRows, clean, operationalMetrics, TABS} from '../src/ui/views.js'
 
 test('config values remain masked except the explicitly revealed variables', async () => {
@@ -108,4 +108,44 @@ test('optional resource integration failures leave the normal resource details v
   const [addon] = appRows('Add-ons', data, {resources})
   assert.match(addon.detail, /heroku-postgresql:essential-0/)
   assert.match(addon.detail, /Costs \/ limits unavailable: Permission denied/)
+})
+
+test('performance rows display measured units, matching memory quota, and bucket percentiles', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  const snapshot = demoTelemetry(data)
+  snapshot.router.latency.series['latency.ms.p95'].fill(125.5)
+  snapshot.processes.web.memory.series['memory.swap-plus-rss.bytes.mean'].fill(128 * 1024 ** 2)
+  snapshot.processes.web.memory.series['memory.quota.bytes.max'].fill(512 * 1024 ** 2)
+  const rows = appRows('Metrics', data, {metrics: {snapshot}})
+  const latency = rows.find(row => row.id === 'telemetry:latency:p95')
+  assert.equal(latency.columns[2], '125.5 ms')
+  assert.match(latency.detail, /not whole-window request percentiles/)
+  const memory = rows.find(row => row.id === 'telemetry:memory:web')
+  assert.equal(memory.columns[2], '128 MiB')
+  assert.match(memory.detail, /Quota \(max\)\s+512 MiB/)
+  assert.match(memory.detail, /Usage \/ quota\s+25%/)
+  assert.match(rows.find(row => row.id === 'telemetry:load:web').detail, /not CPU utilization percent/)
+  assert.match(rows[0].columns[2], /rpm$/)
+  assert.match(rows[0].detail, /req\/min/)
+})
+
+test('performance rows distinguish missing samples, endpoint errors, and stale readings', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  const snapshot = demoTelemetry(data)
+  for (const values of Object.values(snapshot.router.status.series)) values.fill(null)
+  snapshot.router.latency = null
+  snapshot.errors['router.latency'] = 'Permission denied'
+  snapshot.processes.web.memory.times = snapshot.processes.web.memory.times.map(time => time - 3 * 60 * 60_000)
+  const rows = appRows('Metrics', data, {metrics: {snapshot}})
+  assert.deepEqual(rows[0].columns.slice(2), ['—', 'No samples'])
+  assert.match(rows[0].detail, /not a zero reading/)
+  const latency = rows.find(row => row.id === 'telemetry:latency:p50')
+  assert.equal(latency.columns[3], 'Unavailable')
+  assert.match(latency.detail, /Permission denied/)
+  const memory = rows.find(row => row.id === 'telemetry:memory:web')
+  assert.equal(memory.columns[3], 'Stale')
+  assert.equal(memory.tone, 'warning')
+  assert.match(memory.detail, /last available sample/)
 })

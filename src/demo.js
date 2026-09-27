@@ -1,4 +1,29 @@
 import {HerokuAPI} from './api.js'
+import {metricProcesses, normalizeMetric, METRICS_WINDOW_MS} from './metrics.js'
+
+export function demoTelemetry(data, now = Date.now()) {
+  const end = Math.floor(now / 60_000) * 60_000
+  const start = end - METRICS_WINDOW_MS
+  const wave = (base, amplitude) => Array.from({length: 120}, (_, i) => i === 60 ? null : base + Math.sin(i / 8) * amplitude)
+  const metric = series => normalizeMetric({start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(), step: 1, data: series}, {start, end})
+  return {
+    appId: data.app.id, fetchedAt: new Date(now).toISOString(), windowHours: 2, errors: {},
+    router: {
+      status: metric({'200': wave(120, 40).map(value => value === null ? null : Math.round(value)), '500': wave(1, 1).map(value => value === null ? null : Math.round(value))}),
+      latency: metric(Object.fromEntries([['p50', 80], ['p95', 180], ['p99', 300], ['max', 500]].map(([key, value]) => [`latency.ms.${key}`, wave(value, value / 4)]))),
+    },
+    processes: Object.fromEntries(metricProcesses(data).map(process => [process.type, {
+      memory: metric({
+        'memory.swap-plus-rss.bytes.mean': wave(180 * 1024 ** 2, 25 * 1024 ** 2),
+        'memory.rss.bytes.max': wave(200 * 1024 ** 2, 25 * 1024 ** 2),
+        'memory.swap.bytes.max': wave(2 * 1024 ** 2, 1024 ** 2),
+        'memory.total.bytes.max': wave(210 * 1024 ** 2, 25 * 1024 ** 2),
+        'memory.quota.bytes.max': wave((process.size === 'Standard-2X' ? 1024 : 512) * 1024 ** 2, 0),
+      }),
+      load: metric({'load.avg.1m.mean': wave(0.25, 0.15), 'load.avg.1m.max': wave(0.4, 0.2)}),
+    }])),
+  }
+}
 
 export function createDemo() {
   const now = Date.now()
@@ -27,5 +52,5 @@ export function createDemo() {
   api.pipelineApps = async () => structuredClone(apps)
   api.appData = async id => data(apps.find(a => a.id === id || a.name === id))
   api.config = async () => ({NODE_ENV: 'production', EXAMPLE_SECRET: 'demo-only-value', WEB_CONCURRENCY: '2'})
-  return {api, catalog, resources: {available: false, message: 'Cost and limit lookup is disabled in the offline demo.'}, context: {pipeline, reason: 'Offline demo'}}
+  return {api, catalog, fetchMetrics: async data => demoTelemetry(data), resources: {available: false, message: 'Cost and limit lookup is disabled in the offline demo.'}, context: {pipeline, reason: 'Offline demo'}}
 }

@@ -45,9 +45,9 @@ export const TABLE_COLUMNS = {
   ],
   Metrics: [
     {label: 'Metric / Process', compact: 'Metric', min: 14, weight: 3},
-    {label: 'Target / Total', compact: 'Total/Goal', min: 11, weight: 1, max: 16, right: true},
-    {label: 'Current', min: 11, weight: 1, max: 16, right: true},
-    {label: 'Status', width: 13},
+    {label: 'Scope / Limit', compact: 'Scope/Limit', min: 11, weight: 1, max: 18},
+    {label: 'Latest', min: 11, weight: 1, max: 18, right: true},
+    {label: 'Trend / State', compact: 'Trend/State', min: 13, weight: 2, max: 24},
   ],
 }
 

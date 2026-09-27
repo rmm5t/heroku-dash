@@ -86,7 +86,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Inspect domains, ACM state, buildpacks, region, stack, and space; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, including status, author, description, and timestamp |
-| **7 Metrics** | View current dyno health, desired/running counts by process, crashed/starting counts, dyno ages, and recent deployment outcomes |
+| **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and two-hour sparklines, alongside dyno health and recent deployment outcomes |
 
 ### Keyboard shortcuts
 
@@ -151,13 +151,35 @@ Enrichment loads when you open **Resources** or **Add-ons**, using the current H
 
 Switching between views reuses the current app's fetched details. App refreshes refresh enrichment for the active resource view; dyno-size metadata is cached for five minutes. Press **`R`** to refresh immediately, including the size cache. Individual unavailable add-ons or limits don't block the rest of the dashboard. The offline demo does not perform these lookups.
 
-## Metrics and current scope
+## Performance metrics
 
-The Metrics view uses real snapshots from the public Heroku Platform API. It counts `up` and `idle` formation dynos as healthy, excludes one-off processes from desired-formation health, and shows recent release outcomes. Dyno age is time since creation, not a historical uptime guarantee. During deploys, overlapping dynos can exceed the desired count.
+The **Metrics (`7`)** view reads Heroku's separate **`api.metrics.heroku.com`** service using your existing CLI credentials and canonical app IDs. It uses GET requests only, including in `--read-only` mode. No feature flags, log drains, app instrumentation, or dyno restarts are needed.
 
-**CPU, memory, throughput, and request-latency time series are not available through the public Platform API used here.** Press `o` in Metrics to open Heroku's metrics dashboard.
+| Metric | Display |
+| --- | --- |
+| Throughput | Requests/minute (`rpm`), derived from HTTP status-code counts; Details also shows requests/sec, observed request/error counts, and the observed 5xx rate |
+| Response time | Latest completed-bucket p50, p95, and p99 latency in milliseconds, with maximum latency in Details |
+| Memory | Mean RSS + swap usage in MiB (or reported mean used memory when that series is unavailable); Details includes matching-bucket quota, usage percentage, RSS/swap maxima, and total maximum |
+| Dyno load | Mean one-minute load average per process type, with the bucket maximum in Details; this is runnable CPU work, **not CPU utilization percent** |
 
-Add-on provisioning/plan changes, pipeline promotions, log streaming, domain/buildpack edits, and historical monitoring are outside this initial version. Settings other than maintenance mode are displayed read-only. Individual section failures are shown without preventing other sections from loading.
+Rows include a compact sparkline. Select a row for a larger sparkline, sample timestamps, resolution, coverage, and bucket statistics in Details. The window is **two hours**, normally at **one-minute resolution**; Basic/Hobby dynos use ten-minute buckets, with a coarser-resolution retry when required by Heroku. Memory/load are fetched for active formation types and configured `web` processes, rather than for ephemeral one-off dynos.
+
+Metrics load on opening the tab and refresh with the current app while the tab is active. Reopening the tab within 30 seconds reuses its snapshot; **`R`** forces a fresh request. Up to four requests run concurrently, and pending telemetry is canceled when changing apps or quitting. The offline demo supplies synthetic time series without network requests.
+
+### Reading the charts
+
+- Only complete buckets inside the requested window are included. The current/incomplete bucket is excluded.
+- **Zero** is a measured value. **No samples** means the service returned no usable measurements; missing values are never silently converted to zero.
+- `·` marks gaps in a sparkline. Larger time windows are condensed into groups of complete buckets.
+- **Stale** identifies a last reading older than two bucket durations, or a retained snapshot after a refresh failure. Details shows the sample time and any error.
+- Statistics are computed over observed buckets. A mean of bucket p95 values is **not** the p95 of all requests over the entire window.
+- Memory is aggregated by process type, not summed across replicas. Memory quota is a capacity limit; it isn't used as a substitute for measured usage.
+
+Availability depends on app permissions, dyno tier, generation, and metric collection. Eco does not provide application metrics. Cedar dyno-load averages differ from Fir CPU usage; this version does not request a separate Fir CPU-utilization series. Endpoint failures appear alongside working metrics, and **`o`** opens the web metrics dashboard.
+
+Platform snapshots remain below the performance rows: configured/healthy dyno counts, process state, and recent releases. `up` and `idle` formation dynos count as healthy, and one-off processes are excluded from formation health. During deploys, overlapping dynos can exceed the desired count.
+
+Add-on provisioning/plan changes, pipeline promotions, log streaming, and domain/buildpack edits are outside this version. Settings other than maintenance mode are displayed read-only.
 
 ## Development and verification
 
@@ -229,6 +251,14 @@ npm run test:resources -- hermod-staging heimdall-staging
 
 This check also enforces GET-only access, including calls to Heroku's Postgres and Key-Value Store service APIs. It prints resource counts, without fetching config vars.
 
+To verify the performance Metrics API against specific apps:
+
+```sh
+npm run test:metrics -- hermod-staging heimdall-staging
+```
+
+This enforces GET-only access to the Platform and Metrics APIs and prints counts of usable telemetry buckets without fetching config vars.
+
 After linking the plugin, macOS/Linux users with Python 3 can exercise the actual CLI in a pseudo-terminal:
 
 ```sh
@@ -236,11 +266,14 @@ python3 scripts/terminal-check.py
 python3 scripts/terminal-check.py --repo ~/work/hermod
 python3 scripts/terminal-check.py --repo ~/work/heimdall
 python3 scripts/terminal-check.py --repo ~/work/heimdall --resources
+python3 scripts/terminal-check.py --repo ~/work/hermod --metrics
 ```
 
 Without `--repo`, this uses the offline demo. Live terminal checks always pass `--read-only --refresh 0`; mutation behavior is tested only with mocked APIs.
 
 `--resources` also checks Resources/Add-ons cost details in the actual terminal UI; use a pipeline whose first app has dynos and add-ons, with `heroku-resources` installed.
+
+`--metrics` also verifies numeric throughput and memory in the terminal UI. Use a pipeline whose first app has recent metrics, or run it without `--repo` to check the synthetic demo.
 
 ### Layout
 
@@ -250,9 +283,11 @@ src/project.js         Git context and pipeline resolution
 src/hierarchy.js       Team and pipeline parents for resource breadcrumbs
 src/api.js             Platform API reads, pagination, guarded writes
 src/resources.js       Optional adapter to the installed heroku-resources plugin
+src/metrics.js         GET-only telemetry, bucket normalization, and statistics
 src/ui/dashboard.js    Terminal navigation, prompts, refresh, lifecycle
 src/ui/views.js        View models, config masking, operational metrics
 src/ui/resource-details.js  Cost and capacity details and billing annotations
+src/ui/telemetry.js     Performance metric rows, sparklines, and sample details
 src/ui/details.js      Highlighted values and scroll-aware click targets
 src/ui/theme.js        Nerd Font icons, semantic colors, styled labels
 src/ui/text.js         Terminal-safe text sanitization

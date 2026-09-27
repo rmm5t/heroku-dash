@@ -20,6 +20,7 @@
     "check": "npm run lint && npm test && npm run build",
     "test:live": "node scripts/live-check.js",
     "test:resources": "node scripts/resources-check.js",
+    "test:metrics": "node scripts/metrics-check.js",
     "prepack": "npm run build",
     "prepublishOnly": "npm run lint && npm test"
   },

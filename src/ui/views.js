@@ -2,6 +2,7 @@ import {clean, single} from './text.js'
 import {stateStyle} from './theme.js'
 import {addonDetails, dynoDetails} from './resource-details.js'
 import {TABLE_COLUMNS} from './columns.js'
+import {telemetryRows} from './telemetry.js'
 
 export {clean, single} from './text.js'
 export function age(date, now = Date.now()) {
@@ -32,10 +33,10 @@ export function operationalMetrics(data) {
   }
 }
 
-export function appRows(tab, data, {config, configError, revealed = new Set(), resources} = {}) {
+export function appRows(tab, data, {config, configError, revealed = new Set(), resources, metrics} = {}) {
   const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
   const rows = []
-  const noticeColumns = (label, status) => TABLE_COLUMNS[tab]?.map((column, index) => index === 0 ? label : /^(State|Status)/.test(column.label) ? status : '—')
+  const noticeColumns = (label, status) => TABLE_COLUMNS[tab]?.map((column, index) => index === 0 ? label : /State|Status/.test(column.label) ? status : '—')
   const error = section => {
     if (errors[section]) rows.push(row(`${section} unavailable`, errors[section], {
       icon: 'error', tone: 'error', emphasis: 'Unavailable',
@@ -130,13 +131,14 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
     ]), {...stateStyle(release.status), emphasis: release.status}))
   }
   if (tab === 'Metrics') {
+    rows.push(...telemetryRows(data, metrics))
     error('dynos'); error('formation'); error('releases')
     const m = operationalMetrics(data)
     const available = !errors.dynos && !errors.formation
     rows.push(row(`Dyno health    ${available ? `${m.healthy} / ${m.desired} configured dynos up or idle` : 'unavailable'}`, available
       ? `${m.healthy} up / idle   ${m.starting} starting   ${m.crashed} crashed\n${m.total} total dynos, including one-off processes.\n\nBased on current dyno states, not historical availability.\nEco dynos in the idle state are counted as healthy.\nDuring a deploy, overlapping dynos can exceed the desired count.`
       : 'Dyno health cannot be computed because formation or dyno data is unavailable.',
-    {icon: 'metrics', tone: !available ? 'muted' : m.crashed ? 'error' : m.healthy < m.desired ? 'warning' : 'success', emphasis: 'Dyno health',
+    {id: 'health', icon: 'metrics', tone: !available ? 'muted' : m.crashed ? 'error' : m.healthy < m.desired ? 'warning' : 'success', emphasis: 'Dyno health',
       columns: ['Dyno health', available ? m.desired : '—', available ? m.healthy : '—', available ? 'Up / idle' : 'Unavailable']}))
     for (const f of formation) {
       const members = dynos.filter(d => d.type === f.type)
@@ -146,14 +148,13 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
       const detail = lines([['Process', f.type], ['Desired', f.quantity], ['Running', errors.dynos ? 'Unavailable' : running]])
         + '\n\n' + (errors.dynos ? `Dyno data unavailable: ${errors.dynos}` : members.map(d => `${d.name.padEnd(22)} ${d.state.padEnd(10)} age ${age(d.created_at)}`).join('\n') || 'No dynos currently running.')
       rows.push(row(`${f.type}  ·  desired ${f.quantity}  ·  running ${running}`, detail,
-        {icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
+        {id: `health:${f.type}`, icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
           columns: [f.type, f.quantity, errors.dynos ? '—' : running, status]}))
     }
     if (!errors.releases) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,
-      `Latest ${releases.length} releases (up to 20).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
+      `Latest ${releases.length} releases (up to 20).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {id: 'releases', icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
         columns: ['Releases OK', releases.length, releases.filter(r => r.status === 'succeeded').length, !releases.length ? 'No releases' : releases.some(r => r.status === 'failed') ? `${releases.filter(r => r.status === 'failed').length} failed` : 'Succeeded']}))
-    rows.push(row('Telemetry availability', 'CPU, memory, throughput, and latency charts are not exposed by the public Heroku Platform API.\n\nThis view shows live operational snapshots, not APM time-series metrics.\nPress o to open the app’s metrics page in the web dashboard.', {icon: 'overview', tone: 'muted', columns: ['Telemetry', '—', '—', 'Web only']}))
-    rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, `Snapshot: ${data.fetchedAt}\n\nPress R to refresh. Automatic refresh follows --refresh (default: 30 seconds).`, {icon: 'clock', tone: 'muted',
+    rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, `Platform snapshot: ${data.fetchedAt}\n\nPerformance rows use separate time-bucketed data from api.metrics.heroku.com.\nSelect a metric for its sample time, resolution, coverage, and sparkline.\nPress R to refresh, or o to open the metrics dashboard.`, {id: 'snapshot', icon: 'clock', tone: 'muted',
       columns: ['Snapshot', '—', new Date(data.fetchedAt).toLocaleTimeString(), 'Fetched']}))
   }
   const result = rows.length ? rows : [row('No items', `No ${tab.toLowerCase()} to display.`, {icon: 'search', tone: 'muted', columns: noticeColumns('No items', 'Empty')})]

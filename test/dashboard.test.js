@@ -3,7 +3,7 @@ import {PassThrough, Writable} from 'node:stream'
 import {setTimeout as delay} from 'node:timers/promises'
 import test from 'node:test'
 import blessed from 'blessed'
-import {createDemo} from '../src/demo.js'
+import {createDemo, demoTelemetry} from '../src/demo.js'
 import {Dashboard} from '../src/ui/dashboard.js'
 import {clean} from '../src/ui/text.js'
 import {icons, palette} from '../src/ui/theme.js'
@@ -701,4 +701,88 @@ test('late cost data from another app cannot overwrite the current resource deta
   await delay(15)
   assert.equal(d.resourceData.dynos.formations.web.monthlyCost, 100)
   assert.match(d.detail.content, /\$100\.00\/month/)
+})
+
+test('telemetry loads lazily, preserves selected metric and scroll, caches tab switches, and refreshes with R', async t => {
+  const pending = Promise.withResolvers()
+  const calls = []
+  const {dashboard: d, key} = await harness(t, {fetchMetrics: async (data, options) => {
+    calls.push({data, options})
+    return calls.length === 1 ? pending.promise : demoTelemetry(data)
+  }})
+  await key('\r')
+  assert.equal(calls.length, 0)
+  await key('7')
+  assert.equal(calls.length, 1)
+  assert.match(clean(d.status.content), /Loading performance metrics/)
+  d.main.select(2)
+  await d.loadApp(true)
+  assert.equal(calls.length, 1, 'Automatic refresh must not restart an in-flight metrics request')
+  d.detail.setContent(Array.from({length: 40}, (_, i) => `Line ${i}`).join('\n'))
+  d.detail.setScroll(2)
+  pending.resolve(demoTelemetry(calls[0].data))
+  await delay(15)
+  assert.equal(d.rows[d.main.selected].id, 'telemetry:latency:p95')
+  assert.equal(d.detail.childBase, 2)
+  assert.match(d.detail.content, /api.metrics.heroku.com/)
+  assert.equal(d.metricsRequest, null)
+  assert.equal(d.loadingTimer, null)
+  await key('1')
+  await key('7')
+  assert.equal(calls.length, 1)
+  await key('R')
+  assert.equal(calls.length, 2)
+  assert.ok(d.telemetry)
+})
+
+test('old app telemetry is aborted and cannot replace the newly selected app', async t => {
+  const pending = Promise.withResolvers()
+  let firstData, firstSignal
+  const {dashboard: d, key} = await harness(t, {fetchMetrics: async (data, {signal}) => {
+    if (data.app.id === 'app-staging') { firstData = data; firstSignal = signal; return pending.promise }
+    return demoTelemetry(data)
+  }})
+  await key('\r')
+  await key('7')
+  await d.openApp(d.catalog.apps[1])
+  assert.equal(firstSignal.aborted, true)
+  await key('7')
+  pending.resolve(demoTelemetry(firstData))
+  await delay(15)
+  assert.equal(d.telemetry.appId, 'app-production')
+  assert.equal(d.metricsRequest, null)
+})
+
+test('telemetry refresh failure preserves old readings as stale and supports retry', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('\r')
+  await key('7')
+  const snapshot = d.telemetry
+  d.fetchMetrics = async () => { throw new Error('Metrics service unavailable') }
+  await key('R')
+  assert.equal(d.telemetry, snapshot)
+  assert.equal(d.rows[0].columns[3], 'Stale')
+  assert.match(d.detail.content, /Metrics service unavailable/)
+  assert.equal(d.loadingTimer, null)
+  d.fetchMetrics = async data => demoTelemetry(data)
+  await key('R')
+  assert.equal(d.metricsError, null)
+  assert.notEqual(d.rows[0].columns[3], 'Stale')
+})
+
+test('closing the terminal aborts telemetry and ignores a late response', async t => {
+  const pending = Promise.withResolvers()
+  let signal, data
+  const {dashboard: d, key} = await harness(t, {fetchMetrics: async (value, options) => {
+    data = value; signal = options.signal
+    return pending.promise
+  }})
+  await key('\r')
+  await key('7')
+  d.close()
+  assert.equal(signal.aborted, true)
+  assert.equal(d.loadingTimer, null)
+  pending.resolve(demoTelemetry(data))
+  await delay(15)
+  assert.equal(d.telemetry, null)
 })
