@@ -205,7 +205,7 @@ export class Dashboard {
     const pipeline = this.pipeline?.name ?? (this.app ? this.data ? this.data.errors.coupling ? 'Pipeline unavailable' : 'No pipeline' : 'Loading pipeline…' : null)
     const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
       .filter(([, name]) => name).map(([icon, name]) => badge(icon, name, 'fg')).join(`  ${paint(icons.chevron, 'muted')}  `)
-    this.header.setContent(`${paint(`${icons.heroku}  HEROKU DASH`, 'accent', true)}   ${this.demo ? `${badge('staging', 'DEMO', 'info')}   ` : ''}${this.api.readOnly ? badge('lock', 'READ ONLY', 'info') : badge('globe', 'LIVE', 'success')}\n${scope || badge('globe', 'All accessible resources', 'muted')}`)
+    this.header.setContent(`${paint(`${icons.heroku}  HEROKU DASH`, 'accent', true)}   ${this.demo ? `${badge('staging', 'DEMO', 'info')}   ` : ''}${this.api.readOnly ? badge('lock', 'READ ONLY', 'info') : badge('globe', 'READ / WRITE', 'success')}\n${scope || badge('globe', 'All accessible resources', 'muted')}`)
     const tabs = compact => TABS.map((tab, i) => paint(i === this.tab ? `[${i + 1} ${icons[tabIcons[i]]} ${tab}]` : `${i + 1} ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, i === this.tab ? 'accent' : 'muted', i === this.tab)).join('  ')
     const fullTabs = tabs(false)
     const compact = blessed.unicode.strWidth(clean(fullTabs)) > this.tabs.width - 4
