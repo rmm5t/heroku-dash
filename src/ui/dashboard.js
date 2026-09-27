@@ -481,13 +481,16 @@ export class Dashboard {
     const previous = this.rows[this.main.selected]
     const matching = preserve && previous?.id ? rows.findIndex(row => row.id === previous.id) : -1
     const selected = preserve ? matching >= 0 ? matching : this.main.selected : 0
-    // Blessed's setItems temporarily selects row zero. Ignore those synthetic
-    // selection events until the intended row is restored, so details aren't
-    // rendered for a temporary selection or a partially updated list.
+    // Update existing items in place to preserve the viewport. Blessed's
+    // setItems temporarily selects row zero, then scrolls back to the selection.
+    // Suppress those synthetic selection events when a rebuild is needed.
     this.updatingRows = true
     try {
       this.rows = rows
-      this.main.setItems(rows.map(row => rowLabel(row, this.main.width - this.main.iwidth - 1)))
+      const labels = rows.map(row => rowLabel(row, this.main.width - this.main.iwidth - 1))
+      if (preserve && labels.length === this.main.items.length) {
+        for (const [index, label] of labels.entries()) this.main.setItem(index, label)
+      } else this.main.setItems(labels)
       this.main.select(Math.min(selected, Math.max(0, rows.length - 1)))
     } finally {
       this.updatingRows = false

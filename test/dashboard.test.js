@@ -221,6 +221,37 @@ test('v repeatedly reveals and hides the same config row without changing select
   }
 })
 
+test('config reveal and hide preserve a scrolled viewport and the selected row position', async t => {
+  const {dashboard: d, key} = await harness(t)
+  const config = Object.fromEntries(Array.from({length: 60}, (_, i) => [`CONFIG_${String(i).padStart(2, '0')}`, `private-value-${i}`]))
+  d.api.config = async () => config
+  await key('\r')
+  await key('4')
+  const height = d.main.height - d.main.iheight
+  await key('j'.repeat(height * 2))
+  await key('k'.repeat(height - 1))
+  const top = d.main.childBase
+  assert.ok(top >= height, 'Start beyond the first viewport')
+
+  for (const offset of [0, Math.floor(height / 2), height - 1]) {
+    const index = top + offset
+    await key('j'.repeat(index - d.main.selected))
+    const name = d.rows[index].key
+    const y = d.main.items[index].lpos.yi
+    for (let cycle = 0; cycle < 2; cycle++) {
+      for (const revealed of [true, false]) {
+        await key('v')
+        assert.equal(d.main.selected, index)
+        assert.equal(d.main.childBase, top, 'Toggling a value must not move the viewport')
+        assert.equal(d.main.items[index].lpos.yi, y, 'The selected row must stay on the same screen line')
+        assert.equal(d.revealed.has(name), revealed)
+        assert.equal(d.main.items[index].content.includes(config[name]), revealed)
+        assert.equal(d.detail.content.includes(config[name]), revealed)
+      }
+    }
+  }
+})
+
 test('multiple config values can be revealed and hidden independently', async t => {
   const {dashboard: d, screen, key} = await harness(t)
   const config = {FIRST: 'first-private-value', SECOND: 'second-private-value', THIRD: 'third-private-value'}
