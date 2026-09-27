@@ -162,7 +162,9 @@ The **Metrics (`7`)** view reads Heroku's separate **`api.metrics.heroku.com`** 
 | Memory | Mean RSS + swap usage in MiB (or reported mean used memory when that series is unavailable); Details includes matching-bucket quota, usage percentage, RSS/swap maxima, and total maximum |
 | Dyno load | Mean one-minute load average per process type, with the bucket maximum in Details; this is runnable CPU work, **not CPU utilization percent** |
 
-Rows include a compact sparkline. Select a row for a larger sparkline, sample timestamps, resolution, coverage, and bucket statistics in Details. The window is **two hours**, normally at **one-minute resolution**; Basic/Hobby dynos use ten-minute buckets, with a coarser-resolution retry when required by Heroku. Memory/load are fetched for active formation types and configured `web` processes, rather than for ephemeral one-off dynos.
+Rows include a compact sparkline. Select a row for a **colored, multi-line chart** in Details, with a value axis, UTC time labels, and latest/mean/min/max summaries. The Metrics layout gives Details extra vertical space, and charts resize with the terminal. The window is **two hours**, normally at **one-minute resolution**; Basic/Hobby dynos use ten-minute buckets, with a coarser-resolution retry when required by Heroku. Memory/load are fetched for active formation types and configured `web` processes, rather than for ephemeral one-off dynos.
+
+Memory charts include the reported quota guide; p95/p99 latency charts compare against p50/p95 respectively; dyno-load charts include the bucket maximum. Details also includes sample and peak timestamps, resolution, coverage, and metric-specific breakdowns. Focus Details with `Tab` and use `j`/`k` to scroll the full report.
 
 Metrics load on opening the tab and refresh with the current app while the tab is active. Reopening the tab within 30 seconds reuses its snapshot; **`R`** forces a fresh request. Up to four requests run concurrently, and pending telemetry is canceled when changing apps or quitting. The offline demo supplies synthetic time series without network requests.
 
@@ -171,6 +173,8 @@ Metrics load on opening the tab and refresh with the current app while the tab i
 - Only complete buckets inside the requested window are included. The current/incomplete bucket is excluded.
 - **Zero** is a measured value. **No samples** means the service returned no usable measurements; missing values are never silently converted to zero.
 - `·` marks gaps in a sparkline. Larger time windows are condensed into groups of complete buckets.
+- In the detail chart, `◆` marks the latest bucket at its midpoint. Filled columns have complete data; `○` marks a partial group and `·` marks a gap. The line uses the mean of available buckets per column, with `│` min–max whiskers to retain peaks when downsampling.
+- Chart guides use matching time buckets: quota/load-max guides preserve their maximum, while percentile comparison guides use their mean. Axes include the guide's range, start at zero, and display memory in MiB. The time axis is UTC; full timestamps appear below the chart.
 - **Stale** identifies a last reading older than two bucket durations, or a retained snapshot after a refresh failure. Details shows the sample time and any error.
 - Statistics are computed over observed buckets. A mean of bucket p95 values is **not** the p95 of all requests over the entire window.
 - Memory is aggregated by process type, not summed across replicas. Memory quota is a capacity limit; it isn't used as a substitute for measured usage.

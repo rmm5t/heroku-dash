@@ -1,7 +1,7 @@
 import blessed from 'blessed'
 import {single} from './text.js'
 
-function cell(value, width, right = false) {
+export function cell(value, width, right = false) {
   let text = single(value)
   if (blessed.unicode.strWidth(text) > width) {
     let clipped = ''

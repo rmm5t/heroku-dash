@@ -1,8 +1,10 @@
 import blessed from 'blessed'
 import {clean} from './text.js'
 import {paint} from './theme.js'
+import {metricDetailContent} from './metric-chart.js'
 
-export function detailContent(row) {
+export function detailContent(row, dimensions) {
+  if (row?.metricChart) return metricDetailContent(row.metricChart, dimensions)
   const text = clean(row?.detail ?? '')
   if (!row?.valueRange) return text
   const {start, end} = row.valueRange

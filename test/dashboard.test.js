@@ -786,3 +786,28 @@ test('closing the terminal aborts telemetry and ignores a late response', async 
   await delay(15)
   assert.equal(d.telemetry, null)
 })
+
+test('metric detail charts reflow with axes on one line and preserve selection on resize', async t => {
+  const {dashboard: d, screen, key} = await harness(t)
+  await key('\r')
+  await key('7')
+  d.main.select(d.rows.findIndex(row => row.id === 'telemetry:memory:web'))
+  assert.match(clean(d.detail.content), /Quota \(max\)/)
+  assert.match(clean(d.detail.content), /◆ latest/)
+  for (const [width, height] of [[120, 36], [80, 36], [140, 45]]) {
+    screen.program.cols = width
+    screen.program.rows = height
+    screen.program.emit('resize')
+    d.render()
+    assert.equal(d.rows[d.main.selected].id, 'telemetry:memory:web')
+    const source = d.detail.content.split('\n').findIndex(line => clean(line).startsWith('UTC'))
+    assert.ok(source >= 0)
+    assert.equal(d.detail._clines.ftor[source].length, 1, 'Time-axis labels must not wrap onto another line')
+    assert.ok(d.detail.top < Math.floor(height * 0.4) + 7, 'Metrics reserves more room for the detail chart')
+  }
+  await key('4')
+  assert.equal(d.chartLayout, null)
+  assert.equal(d.main.position.height, '40%-4')
+  await key('v')
+  assert.ok(d.detail.content.includes('demo-only-value'))
+})

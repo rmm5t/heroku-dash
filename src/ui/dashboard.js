@@ -207,7 +207,12 @@ export class Dashboard {
 
   render() {
     if (this.closed) return
+    const metricView = this.app && TABS[this.tab] === 'Metrics'
+    const listHeight = Math.max(5, Math.floor(this.screen.height * 0.32) - 4)
+    this.main.height = metricView ? listHeight : '40%-4'
+    this.detail.top = metricView ? 11 + listHeight : '40%+7'
     this.layoutColumns()
+    this.layoutMetricChart()
     const team = this.app || this.pipeline ? this.breadcrumbTeam?.name ?? 'Loading team…' : this.team?.name
     const pipeline = this.pipeline?.name ?? (this.app ? this.data ? this.data.errors.coupling ? 'Pipeline unavailable' : 'No pipeline' : 'Loading pipeline…' : null)
     const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
@@ -507,9 +512,26 @@ export class Dashboard {
   drawDetail() {
     const row = this.rows[this.main.selected]
     this.detail.setLabel(` ${icons[row?.icon] ?? icons.overview}  Details `)
-    this.detail.setContent(detailContent(row))
+    const dimensions = this.detailDimensions()
+    this.detail.setContent(detailContent(row, dimensions))
+    this.chartLayout = row?.metricChart ? {row, ...dimensions} : null
     this.detail.setScroll(0)
     this.render()
+  }
+
+  detailDimensions() {
+    return {width: Math.max(1, this.detail.width - this.detail.iwidth - 1), height: this.detail.height - this.detail.iheight}
+  }
+
+  layoutMetricChart() {
+    const row = this.rows[this.main.selected]
+    if (!row?.metricChart) { this.chartLayout = null; return }
+    const {width, height} = this.detailDimensions()
+    if (this.chartLayout?.row === row && this.chartLayout.width === width && this.chartLayout.height === height) return
+    const scroll = this.detail.childBase
+    this.detail.setContent(detailContent(row, {width, height}))
+    this.detail.setScroll(scroll)
+    this.chartLayout = {row, width, height}
   }
 
   changeTab(index) {

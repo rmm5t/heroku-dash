@@ -64,6 +64,7 @@ try:
     wait_for('Throughput')
     if args.metrics:
         wait_for('rpm')
+        send(b'jjjj')  # Select the first process's Memory row.
         wait_for('MiB')
     send(b'?')
     wait_for('Keyboard shortcuts')
