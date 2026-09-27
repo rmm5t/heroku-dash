@@ -1,6 +1,7 @@
 import blessed from 'blessed'
 import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
+import packageJSON from '../../package.json' with {type: 'json'}
 import {errorMessage} from '../api.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {fetchTelemetry, metricsScope} from '../metrics.js'
@@ -11,6 +12,7 @@ import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, 
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 
 const SIDEBAR_WIDTH = '22%'
+const VERSION = `v${packageJSON.version}`
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
 
@@ -57,6 +59,8 @@ export class Dashboard {
   widgets() {
     const parent = this.screen
     this.header = blessed.box({parent, top: 0, height: 3, left: 0, right: 0, padding: {left: 2}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
+    blessed.box({parent: this.header, top: 0, right: 2, width: VERSION.length, height: 1, tags: false,
+      content: VERSION, style: {fg: palette.muted, bg: palette.panel}})
     this.nav = blessed.list({parent, top: 3, bottom: 4, left: 0, width: SIDEBAR_WIDTH, ...frame(), label: ` ${icons.pipelines}  Pipelines `, keys: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bold: true}, item: {fg: palette.fg, bg: palette.bg}}})
     this.tabs = blessed.box({parent, top: 3, height: 3, left: SIDEBAR_WIDTH, right: 0, ...frame(), padding: {left: 1}, style: {...frame().style, fg: palette.accent}})
