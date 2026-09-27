@@ -102,7 +102,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | `Esc` | Return to pipeline / workspace, clear a sidebar filter, or cancel a prompt |
 | `1`–`7` | Select an app view |
 | `h` / `l`, `[` / `]`, `←` / `→` | Previous / next app view |
-| `R` | Refresh the current app, pipeline, or workspace catalog |
+| `R` / `g` | Refresh the current app, pipeline, or workspace catalog |
 | `Ctrl-L` | Redraw the terminal |
 | `o` | Open the corresponding Heroku web dashboard page |
 | `?` | Show keyboard help |
