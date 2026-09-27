@@ -7,7 +7,7 @@ import {fetchTelemetry, metricsScope} from '../metrics.js'
 import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
-import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, tabIcons} from './theme.js'
+import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 
 const SIDEBAR_WIDTH = '22%'
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
@@ -55,11 +55,12 @@ export class Dashboard {
     const parent = this.screen
     this.header = blessed.box({parent, top: 0, height: 3, left: 0, right: 0, padding: {left: 2}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
     this.nav = blessed.list({parent, top: 3, bottom: 4, left: 0, width: SIDEBAR_WIDTH, ...frame(), label: ` ${icons.pipelines}  Pipelines `, keys: true, mouse: true, tags: false,
-      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bg: palette.selected, fg: 'white', bold: true}, item: {fg: palette.fg}}})
+      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bold: true}, item: {fg: palette.fg}}})
     this.tabs = blessed.box({parent, top: 3, height: 3, left: SIDEBAR_WIDTH, right: 0, ...frame(), padding: {left: 1}, style: {...frame().style, fg: palette.accent}})
     this.summary = blessed.box({parent, top: 6, height: 5, left: SIDEBAR_WIDTH, right: 0, padding: {left: 2, right: 1}, style: {fg: palette.fg, bg: palette.bg}})
     this.main = blessed.list({parent, top: 11, height: '40%-4', left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.apps}  Apps `, keys: true, mouse: true, tags: false,
-      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bg: palette.selected, fg: 'white'}, item: {fg: palette.fg}}})
+      scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, item: {fg: palette.fg}}})
+    for (const list of [this.nav, this.main]) styleListSelection(list)
     this.columnHeader = blessed.box({parent: this.main, top: -1, left: 0, right: 1, height: 1, fixed: true, hidden: true, tags: false, autoFocus: false,
       style: {fg: palette.muted, bg: palette.panel, bold: true}})
     this.columnHeader.on('click', () => {

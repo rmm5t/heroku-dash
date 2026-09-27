@@ -48,6 +48,39 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.rows[0].kind, 'app')
 })
 
+test('selection highlights follow keyboard and mouse focus with one purple marker', async t => {
+  const {dashboard: d, screen, key, click} = await harness(t)
+  const assertSelections = focused => {
+    for (const list of [d.nav, d.main]) {
+      const active = list === focused
+      const {xi, yi} = list.items[list.selected].lpos
+      const [attr] = screen.lines[yi][xi + 4]
+      assert.equal((attr >> 9) & 0x1ff, blessed.colors.convert(active ? palette.selectedFg : palette.selectedInactiveFg))
+      assert.equal(attr & 0x1ff, blessed.colors.convert(active ? palette.selected : palette.selectedInactive))
+      const [markerAttr, marker] = screen.lines[yi][xi]
+      assert.equal(marker, active ? '▎' : ' ')
+      if (active) assert.equal((markerAttr >> 9) & 0x1ff, blessed.colors.convert(palette.selectionMarker))
+    }
+    assert.equal(screen.lines.flat().filter(cell => cell[1] === '▎').length, focused ? 1 : 0)
+  }
+  assertSelections(d.main)
+  await key('\t')
+  assert.equal(screen.focused, d.detail)
+  assertSelections(null)
+  await key('\t')
+  assertSelections(d.nav)
+
+  const app = d.rows[1].value
+  const {xi, yi} = d.main.items[1].lpos
+  await click(xi + 4, yi)
+  assert.equal(d.main.selected, 1)
+  assertSelections(d.main)
+  // The decorative marker must let clicks reach the selected app row.
+  await click(xi, yi)
+  assert.equal(d.app.id, app.id)
+  assertSelections(d.main)
+})
+
 test('switching apps through the sidebar preserves every selected app tab', async t => {
   const {dashboard: d, key} = await harness(t)
   await key('\r')
@@ -222,7 +255,7 @@ test('v repeatedly reveals and hides the same config row without changing select
 })
 
 test('config reveal and hide preserve a scrolled viewport and the selected row position', async t => {
-  const {dashboard: d, key} = await harness(t)
+  const {dashboard: d, screen, key} = await harness(t)
   const config = Object.fromEntries(Array.from({length: 60}, (_, i) => [`CONFIG_${String(i).padStart(2, '0')}`, `private-value-${i}`]))
   d.api.config = async () => config
   await key('\r')
@@ -244,6 +277,9 @@ test('config reveal and hide preserve a scrolled viewport and the selected row p
         assert.equal(d.main.selected, index)
         assert.equal(d.main.childBase, top, 'Toggling a value must not move the viewport')
         assert.equal(d.main.items[index].lpos.yi, y, 'The selected row must stay on the same screen line')
+        const [markerAttr, marker] = screen.lines[y][d.main.items[index].lpos.xi]
+        assert.equal(marker, '▎', 'The selection marker must follow the row after scrolling')
+        assert.equal((markerAttr >> 9) & 0x1ff, blessed.colors.convert(palette.selectionMarker))
         assert.equal(d.revealed.has(name), revealed)
         assert.equal(d.main.items[index].content.includes(config[name]), revealed)
         assert.equal(d.detail.content.includes(config[name]), revealed)

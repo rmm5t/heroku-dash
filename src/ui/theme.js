@@ -4,7 +4,8 @@ import {tableColumns} from './columns.js'
 
 export const palette = {
   bg: '#161b22', panel: '#1c212b', fg: '#c9d1d9', muted: '#8b949e',
-  accent: '#bc8cff', border: '#484f58', selected: '#30304b',
+  accent: '#bc8cff', border: '#484f58', selected: '#3a3a3a', selectedFg: '#eeeeee',
+  selectedInactive: '#262626', selectedInactiveFg: '#bcbcbc', selectionMarker: '#af87ff',
   success: '#7ee787', warning: '#e3b341', error: '#ff7b72', info: '#79c0ff', cyan: '#76e3ea',
   loadingTrail: '#916bbb', loadingFade: '#5e467e', loadingDim: '#362b48',
 }
@@ -27,6 +28,26 @@ export const stageStyles = {
   review: {icon: 'review', tone: 'accent'},
   staging: {icon: 'staging', tone: 'warning'},
   production: {icon: 'releases', tone: 'success'},
+}
+
+export function styleListSelection(list) {
+  const focused = () => list.screen.focused === list
+  Object.assign(list.style.selected, {
+    fg: () => focused() ? palette.selectedFg : palette.selectedInactiveFg,
+    bg: () => focused() ? palette.selected : palette.selectedInactive,
+  })
+  // An overlay keeps its purple foreground when Blessed overrides the selected
+  // row's ANSI colors. It occupies the label's existing leading space.
+  const marker = blessed.box({parent: list, top: 0, left: 0, width: 1, height: 1,
+    fixed: true, autoFocus: false, tags: false, hidden: true, content: '▎',
+    style: {fg: palette.selectionMarker, bg: palette.selected}})
+  list.on('prerender', () => {
+    const top = list.selected - list.childBase
+    if (!focused() || !list.items[list.selected] || top < 0 || top >= list.height - list.iheight) { marker.hide(); return }
+    marker.top = top
+    marker.show()
+    marker.setFront()
+  })
 }
 
 // Only these helpers introduce ANSI styles, after sanitizing their payloads.
