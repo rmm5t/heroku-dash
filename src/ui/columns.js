@@ -23,7 +23,7 @@ export const TABLE_COLUMNS = {
     {label: 'Item / Process', min: 14, weight: 1, max: 24},
     {label: 'Size / Value', min: 10, weight: 3},
     {label: 'Qty', width: 4, right: true},
-    {label: 'Status', width: 13},
+    {label: 'Status/Action', width: 13},
   ],
   Resources: [
     {label: 'Process / Dyno', min: 14, weight: 1, max: 26},

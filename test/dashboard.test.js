@@ -392,10 +392,68 @@ test('filter input receives shortcut letters without changing navigation', async
 test('read-only action keys do not open mutation prompts', async t => {
   const {dashboard: d, key} = await harness(t)
   await key('\r')
-  await key('2')
+  for (const tab of ['1', '2']) {
+    await key(tab)
+    d.main.select(d.rows.findIndex(row => row.kind === 'formation'))
+    await key('s')
+    assert.equal(d.modal, undefined)
+    assert.match(d.message, /Read-only/)
+  }
+})
+
+test('Overview scales inactive and active process rows through the confirmed flow', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  let quantity = 0
+  const writes = []
+  const original = demo.api.appData
+  demo.api.appData = async id => {
+    const data = await original(id)
+    const [web, worker] = data.formation
+    data.formation = [{...worker, quantity}, web]
+    return data
+  }
+  demo.api.scale = async (...args) => { writes.push(args); quantity = args[2] }
+  const {dashboard: d, key} = await harness(t, demo)
+  await key('\r')
+  for (const desired of [2, 0]) {
+    d.main.select(d.rows.findIndex(row => row.id === 'overview:formation:worker'))
+    const before = writes.length
+    await key('s')
+    assert.match(d.modal.children.map(child => child.content).join('\n'), /constellation-staging \/ worker/)
+    await key('\x15')
+    await key(String(desired))
+    await key('\r')
+    await key('\r') // Retain the current dyno size.
+    assert.equal(writes.length, before)
+    await key('constellation-staging')
+    await key('\r')
+    assert.deepEqual(writes.at(-1), ['constellation-staging', 'worker', desired, 'Standard-2X', 'constellation-staging'])
+    assert.equal(d.tab, 0)
+    assert.equal(d.rows[d.main.selected].id, 'overview:formation:worker')
+    assert.equal(d.rows[d.main.selected].value.quantity, desired)
+  }
+})
+
+test('Overview scaling ignores non-process rows and can be canceled', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  demo.api.scale = async () => assert.fail('No scaling should be submitted')
+  const {dashboard: d, key} = await harness(t, demo)
+  await key('\r')
+  for (const [index, row] of d.rows.entries()) {
+    if (row.kind === 'formation') continue
+    d.main.select(index)
+    await key('s')
+    assert.ok(!d.modal)
+    assert.match(d.message, /Select a process type/)
+  }
+  d.main.select(d.rows.findIndex(row => row.kind === 'formation'))
   await key('s')
-  assert.equal(d.modal, undefined)
-  assert.match(d.message, /Read-only/)
+  assert.ok(d.modal)
+  await key('\x1b')
+  await delay(50)
+  assert.equal(d.modal, null)
 })
 
 test('scale cancellation and mismatched confirmation never call the API', async t => {

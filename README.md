@@ -112,7 +112,7 @@ App actions:
 
 | Key | View | Action |
 | --- | --- | --- |
-| `s` | Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and dyno size |
+| `s` | Overview / Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and dyno size |
 | `v` | Config | Reveal / hide the selected value |
 | `y` | Config | Copy the selected variable's full value to the clipboard, even when masked |
 | `e` | Config | Replace the selected variable's value |

@@ -51,13 +51,14 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
     ]), {...stateStyle(app.maintenance ? 'maintenance' : 'active'), emphasis: app.maintenance ? 'MAINTENANCE' : 'ACTIVE',
       columns: ['App', app.name, '—', app.maintenance ? 'MAINTENANCE' : 'ACTIVE']}))
     rows.push(row(`${formation.reduce((n, f) => n + f.quantity, 0)} configured dynos  ·  ${addons.length} add-ons`,
-      'Use Resources to inspect and scale process types.\nUse Add-ons to inspect plans and attachments.\nConfig values are masked until explicitly revealed.', {
+      'Select a process row in Overview or Resources and press s to scale it.\nUse Add-ons to inspect plans and attachments.\nConfig values are masked until explicitly revealed.', {
         icon: 'resources', columns: ['Total dynos', errors.addons ? 'Add-ons unavailable' : `${addons.length} add-ons`, errors.formation ? '—' : formation.reduce((n, f) => n + f.quantity, 0), errors.formation ? 'Unavailable' : 'Configured'],
       }))
     const orderedFormation = [...formation].sort((a, b) => Number(b.quantity > 0) - Number(a.quantity > 0))
-    for (const f of orderedFormation) rows.push(row(`${f.type}  ·  ${f.quantity} × ${f.size}`, lines([
+    for (const f of orderedFormation) rows.push(row(`${f.type}  ·  ${f.quantity} × ${f.size}    [s] scale`, lines([
       ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
-    ]), {id: `overview:formation:${f.type}`, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', columns: [f.type, f.size, f.quantity, f.quantity ? 'Configured' : 'Scaled to 0']}))
+      ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
+    ]), {id: `overview:formation:${f.type}`, kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', columns: [f.type, f.size, f.quantity, '[s] scale']}))
     if (releases[0]) rows.push(row(`Latest release: v${releases[0].version}  ·  ${releases[0].status}`, releases[0].description, {
       ...stateStyle(releases[0].status), emphasis: releases[0].status, columns: ['Latest release', `v${releases[0].version}`, '—', releases[0].status],
     }))
