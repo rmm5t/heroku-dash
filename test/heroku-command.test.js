@@ -26,29 +26,36 @@ test('the app selector is inserted before passthrough and cannot be overridden',
 
 test('command execution uses argv without a shell, streams output, and supports cancellation', async () => {
   const calls = []
+  const signals = []
   let child
   const spawnProcess = (command, args, options) => {
     child = new EventEmitter()
+    child.pid = 4321
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
-    child.kill = () => { child.killed = true; queueMicrotask(() => child.emit('close', null, 'SIGTERM')); return true }
+    child.kill = () => assert.fail('POSIX cancellation should terminate the process group')
     calls.push({command, args, options})
     return child
   }
   const output = []
   const controller = new AbortController()
   const running = executeHerokuCommand(['logs', '--app', 'exact-app'], {
-    executable: '/bin/heroku', environment: {PATH: '/bin'}, spawnProcess, signal: controller.signal, onOutput: chunk => output.push(chunk),
+    executable: '/bin/heroku', environment: {PATH: '/bin'}, platform: 'darwin', spawnProcess, signal: controller.signal,
+    killProcess(pid, signal) { signals.push([pid, signal]); queueMicrotask(() => child.emit('close', null, signal)) },
+    onOutput: chunk => output.push(chunk),
   })
   child.stdout.write('standard output\n')
   child.stderr.write('standard error\n')
   controller.abort()
   assert.deepEqual(await running, {code: null, signal: 'SIGTERM'})
-  assert.equal(child.killed, true)
+  assert.deepEqual(signals, [[-4321, 'SIGTERM']])
+  assert.equal(child.stdout.destroyed, true)
+  assert.equal(child.stderr.destroyed, true)
   assert.deepEqual(output, ['standard output\n', 'standard error\n'])
   assert.equal(calls[0].command, '/bin/heroku')
   assert.deepEqual(calls[0].args, ['logs', '--app', 'exact-app'])
   assert.equal(calls[0].options.shell, false)
+  assert.equal(calls[0].options.detached, true)
   assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe'])
   assert.equal(calls[0].options.env.NO_COLOR, undefined)
   assert.equal(calls[0].options.env.FORCE_COLOR, '1')

@@ -54,12 +54,15 @@ export function formatHerokuCommand(args) {
 }
 
 export function executeHerokuCommand(args, {signal, onOutput = () => {}, spawnProcess = spawn,
-  executable = process.env.HEROKU_BINPATH || (process.platform === 'win32' ? 'heroku.cmd' : 'heroku'), environment = process.env} = {}) {
+  executable = process.env.HEROKU_BINPATH || (process.platform === 'win32' ? 'heroku.cmd' : 'heroku'), environment = process.env,
+  platform = process.platform, killProcess = process.kill} = {}) {
   if (signal?.aborted) return Promise.reject(new Error('Command cancelled.'))
   return new Promise((resolve, reject) => {
     const env = {...environment}
     if (env.NO_COLOR === undefined && env.FORCE_COLOR === undefined) env.FORCE_COLOR = '1'
+    const detached = platform !== 'win32'
     const child = spawnProcess(executable, args, {
+      detached,
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -72,7 +75,13 @@ export function executeHerokuCommand(args, {signal, onOutput = () => {}, spawnPr
       signal?.removeEventListener('abort', abort)
       callback(value)
     }
-    const abort = () => child.kill()
+    const abort = () => {
+      if (detached && child.pid) {
+        try { killProcess(-child.pid, 'SIGTERM') } catch { child.kill('SIGTERM') }
+      } else child.kill('SIGTERM')
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+    }
     for (const stream of [child.stdout, child.stderr]) {
       stream?.setEncoding('utf8')
       stream?.on('data', onOutput)

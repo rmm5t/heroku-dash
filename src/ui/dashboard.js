@@ -711,7 +711,18 @@ export class Dashboard {
         style: {...frame().style, fg: palette[tone], border: {fg: palette[tone]}}})
       const proceed = button('Continue (y)', '25%-11', 'success')
       const cancel = button('Cancel (n)', '75%-11', 'muted')
+      let selected = true
       let finished = false
+      const select = value => {
+        selected = value
+        for (const [control, active] of [[proceed, selected], [cancel, !selected]]) {
+          const tone = active ? 'success' : 'muted'
+          control.style.fg = palette[tone]
+          control.style.border.fg = palette[tone]
+        }
+
+        this.render()
+      }
       const finish = value => {
         if (finished) return
         finished = true
@@ -725,6 +736,9 @@ export class Dashboard {
       modal.on('keypress', (_ch, key) => {
         if (key.name?.toLowerCase() === 'y') finish(true)
         if (key.name?.toLowerCase() === 'n' || key.name === 'escape') finish(false)
+        if (key.name === 'left') select(true)
+        if (key.name === 'right') select(false)
+        if (key.name === 'enter') finish(selected)
       })
       proceed.on('click', () => finish(true))
       cancel.on('click', () => finish(false))
@@ -907,7 +921,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  s               Scale selected process in Overview / Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use a y/n confirmation.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors and do not support interactive TTYs.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  s               Scale selected process in Overview / Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors and do not support interactive TTYs.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
