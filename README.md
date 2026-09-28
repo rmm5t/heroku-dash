@@ -262,7 +262,7 @@ This updates `package.json` and `package-lock.json`; npm does not allow publishi
 These are opt-in and use the current Heroku CLI account:
 
 ```sh
-npm run test:live -- ~/work/hermod ~/work/heimdall
+npm run test:live -- ~/work/example-app ~/work/other-app
 ```
 
 The live-check transport **rejects every method except GET**. It verifies repository-to-pipeline resolution and renders all seven app views, printing counts rather than config values. It reads every app in the detected pipelines.
@@ -270,7 +270,7 @@ The live-check transport **rejects every method except GET**. It verifies reposi
 To verify cost/limit enrichment with the installed `heroku-resources` plugin against specific apps:
 
 ```sh
-npm run test:resources -- hermod-staging heimdall-staging
+npm run test:resources -- example-app-staging other-app-staging
 ```
 
 This check also enforces GET-only access, including calls to Heroku's Postgres and Key-Value Store service APIs. It prints resource counts, without fetching config vars.
@@ -278,7 +278,7 @@ This check also enforces GET-only access, including calls to Heroku's Postgres a
 To verify the performance Metrics API against specific apps:
 
 ```sh
-npm run test:metrics -- hermod-staging heimdall-staging
+npm run test:metrics -- example-app-staging other-app-staging
 ```
 
 This enforces GET-only access to the Platform and Metrics APIs and prints counts of usable telemetry buckets without fetching config vars.
@@ -287,10 +287,10 @@ After linking the plugin, macOS/Linux users with Python 3 can exercise the actua
 
 ```sh
 python3 scripts/terminal-check.py
-python3 scripts/terminal-check.py --repo ~/work/hermod
-python3 scripts/terminal-check.py --repo ~/work/heimdall
-python3 scripts/terminal-check.py --repo ~/work/heimdall --resources
-python3 scripts/terminal-check.py --repo ~/work/hermod --metrics
+python3 scripts/terminal-check.py --repo ~/work/example-app
+python3 scripts/terminal-check.py --repo ~/work/other-app
+python3 scripts/terminal-check.py --repo ~/work/other-app --resources
+python3 scripts/terminal-check.py --repo ~/work/example-app --metrics
 ```
 
 Without `--repo`, this uses the offline demo. Live terminal checks always pass `--read-only --refresh 0`; mutation behavior is tested only with mocked APIs.
