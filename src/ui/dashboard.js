@@ -701,14 +701,19 @@ export class Dashboard {
     return value
   }
 
-  confirmChoice(title, description) {
+  confirmChoice(title, description, {highlightFirstLine = false} = {}) {
     if (this.closed) return Promise.resolve(false)
     return new Promise(resolve => {
       const previous = this.screen.focused
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 13, ...frame(),
         label: ` ${icons.warning}  ${single(title)} `, style: {...frame().style, border: {fg: palette.warning}}})
       this.modal = modal
-      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: clean(description), tags: false,
+      const text = clean(description)
+      const newline = text.indexOf('\n')
+      const content = highlightFirstLine
+        ? `${paint(newline < 0 ? text : text.slice(0, newline), 'warning', true)}${newline < 0 ? '' : text.slice(newline)}`
+        : text
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content, tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const button = (content, left, tone) => blessed.box({parent: modal, bottom: 1, left, width: 22, height: 3, ...frame(),
         content, align: 'center', valign: 'middle', mouse: true, tags: false,
@@ -870,7 +875,7 @@ export class Dashboard {
     catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
     const invocation = formatHerokuCommand(args)
     const interactive = isInteractiveHerokuCommand(args)
-    const confirmed = await this.confirmChoice('Confirm Heroku command', `${invocation}\n\nTarget: ${app.name}\nCustom CLI commands can modify remote resources.${interactive ? '\nThis command will temporarily take over the terminal.' : ''}`)
+    const confirmed = await this.confirmChoice('Confirm Heroku command', `${invocation}\n\nTarget: ${app.name}\nCustom CLI commands can modify remote resources.${interactive ? '\nThis command will temporarily take over the terminal.' : ''}`, {highlightFirstLine: true})
     if (!confirmed) { this.setStatus('Command cancelled.'); return }
     if (this.closed || this.app?.id !== app.id) return
     if (interactive) await this.interactiveCommand(app, args, invocation)
