@@ -249,7 +249,7 @@ npm publish
 
 `npm publish` runs lint and tests through `prepublishOnly`, then generates the command manifest through `prepack`. The package includes the runtime source, `oclif.manifest.json`, README, and MIT license. Development dependencies are needed to publish, but aren't required when installing the published plugin. Package access is explicitly public.
 
-The current package version is **`heroku-dash@0.6.0`**. For subsequent releases, increment the version before publishing, for example:
+The current package version is **`heroku-dash@0.6.1`**. For subsequent releases, increment the version before publishing, for example:
 
 ```sh
 npm version patch --no-git-tag-version
