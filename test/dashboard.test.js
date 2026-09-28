@@ -46,8 +46,10 @@ async function harness(t, override = {}) {
 test('keyboard opens pipeline apps and switches all app views', async t => {
   const {dashboard: d, key} = await harness(t)
   assert.equal(d.rows[0].kind, 'app')
+  assert.ok(!clean(d.footer.content).includes(': command'))
   await key('\r')
   assert.equal(d.app.name, 'constellation-staging')
+  assert.ok(clean(d.footer.content).includes(': command'))
   for (let tab = 1; tab <= 7; tab++) {
     await key(String(tab))
     assert.equal(d.tab, tab - 1)
@@ -632,6 +634,73 @@ test('filter input receives shortcut letters without changing navigation', async
   assert.equal(d.modal, null)
   assert.equal(d.filter, 'constellation')
   assert.equal(d.navItems.length, 1)
+})
+
+test('app-scoped Heroku commands require confirmation and stream sanitized output in a floating pane', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const execution = Promise.withResolvers()
+  const calls = []
+  const executeHeroku = async (args, options) => {
+    calls.push({args, signal: options.signal})
+    options.onOutput('first line\n\x1b]52;c;hidden-value\x07second line\n')
+    return execution.promise
+  }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false, executeHeroku})
+  await key('\r')
+  await key(':')
+  assert.match(d.modal._label.content, /Heroku command.*constellation-staging/)
+  await key('logs --num "10"')
+  await key('\r')
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /heroku logs --num 10 --app constellation-staging/)
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /Continue \(y\)/)
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /Cancel \(n\)/)
+  assert.equal(calls.length, 0)
+  await key('y')
+  assert.deepEqual(calls[0].args, ['logs', '--num', '10', '--app', 'constellation-staging'])
+  const output = d.modal.children.find(child => child.scrollable)
+  assert.match(output.content, /first line\nsecond line/)
+  assert.ok(!output.content.includes('hidden-value'))
+  assert.equal(calls[0].signal.aborted, false)
+  execution.resolve({code: 0, signal: null})
+  await delay(20)
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Completed successfully/)
+  await key('q')
+  assert.equal(d.modal, null)
+  assert.match(d.message, /command completed/i)
+})
+
+test('custom commands reject retargeting and are unavailable in read-only and demo modes', async t => {
+  let calls = 0
+  const {dashboard: d, key, click} = await harness(t, {executeHeroku: async () => { calls++ }})
+  await key('\r')
+  await key(':')
+  assert.equal(d.modal, undefined)
+  assert.match(d.message, /Read-only/)
+  d.api.readOnly = false
+  d.demo = true
+  await key(':')
+  assert.equal(d.modal, undefined)
+  assert.match(d.message, /offline demo/)
+  d.demo = false
+  await key(':')
+  await key('logs --app another-app')
+  await key('\r')
+  assert.equal(d.modal, null)
+  assert.match(d.message, /selectors are not allowed/)
+  await key(':')
+  await key('logs')
+  await key('\r')
+  await key('n')
+  assert.equal(d.modal, null)
+  assert.match(d.message, /Command cancelled/)
+  await key(':')
+  await key('logs')
+  await key('\r')
+  const cancel = d.modal.children.find(child => child.content === 'Cancel (n)')
+  await click(Math.floor((cancel.lpos.xi + cancel.lpos.xl) / 2), Math.floor((cancel.lpos.yi + cancel.lpos.yl) / 2))
+  assert.equal(d.modal, null)
+  assert.equal(calls, 0)
 })
 
 test('read-only action keys do not open mutation prompts', async t => {

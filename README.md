@@ -141,12 +141,15 @@ App actions:
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
 | `d` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
+| `:` | Any app view | Run a custom Heroku CLI command scoped to the current app |
 
 In prompts, `Enter` continues, `Esc` cancels, and `Ctrl-U` clears the input. Config-value input is masked. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
 
 ## Remote changes and config values
 
-Every write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
+Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
+
+Press **`:`** while viewing an app to enter a Heroku CLI command without the leading `heroku`. Dash rejects `-a` / `--app` and `-r` / `--remote`, then adds `--app` with the exact current app before executing. The command runs without a shell and shows **Continue (y)** and **Cancel (n)** buttons because custom commands can modify remote resources; press `y` or `n` to choose immediately without pressing Enter. Output streams into a scrollable floating pane; `Esc` or `q` closes the pane and stops a running command. Interactive TTY commands such as `run bash` are not supported. Custom commands are disabled in `--read-only` and demo modes.
 
 `--read-only` blocks all non-GET requests at the plugin's API boundary, in addition to disabling mutation prompts. The offline demo also runs read-only.
 
