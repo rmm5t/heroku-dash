@@ -768,6 +768,43 @@ test('read-only action keys do not open mutation prompts', async t => {
     assert.equal(d.modal, undefined)
     assert.match(d.message, /Read-only/)
   }
+  await key('2')
+  for (const kind of ['formation', 'dyno']) {
+    d.main.select(d.rows.findIndex(row => row.kind === kind))
+    for (const action of ['x', 'r']) {
+      await key(action)
+      assert.equal(d.modal, undefined)
+      assert.match(d.message, /Read-only/)
+    }
+  }
+})
+
+test('Resources stops and restarts selected processes and dynos through confirmed API actions', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const writes = []
+  demo.api.stop = async (...args) => { writes.push(['stop', ...args]) }
+  demo.api.restart = async (...args) => { writes.push(['restart', ...args]) }
+  const {dashboard: d, key} = await harness(t, demo)
+  await key('\r')
+  await key('2')
+  const cases = [
+    ['formation:web', 'x', 'Stop process web', ['stop', 'constellation-staging', 'web', 'process', 'constellation-staging']],
+    ['formation:worker', 'r', 'Restart process worker', ['restart', 'constellation-staging', 'worker', 'process', 'constellation-staging']],
+    ['dyno:web.1', 'x', 'Stop dyno web.1', ['stop', 'constellation-staging', 'web.1', 'dyno', 'constellation-staging']],
+    ['dyno:worker.1', 'r', 'Restart dyno worker.1', ['restart', 'constellation-staging', 'worker.1', 'dyno', 'constellation-staging']],
+  ]
+  for (const [id, keybinding, description, expected] of cases) {
+    d.main.select(d.rows.findIndex(row => row.id === id))
+    await key(keybinding)
+    const prompt = d.modal.children.map(child => child.content).join('\n')
+    assert.match(prompt, new RegExp(description))
+    if (keybinding === 'x') assert.match(prompt, /configured dynos restart automatically/i)
+    await key('constellation-staging')
+    await key('\r')
+    assert.deepEqual(writes.at(-1), expected)
+    assert.equal(d.rows[d.main.selected].id, id)
+  }
 })
 
 test('Overview scales inactive and active process rows through the confirmed flow', async t => {

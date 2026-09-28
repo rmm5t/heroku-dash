@@ -160,6 +160,8 @@ export class Dashboard {
       }
     })
     key(['s'], () => void this.scale())
+    key(['x'], () => void this.dynoAction('stop'))
+    key(['r'], () => void this.dynoAction('restart'))
     key(['y'], () => void this.copyConfig())
     key(['e'], () => void this.editConfig(false))
     key(['n'], () => void this.editConfig(true))
@@ -787,6 +789,26 @@ export class Dashboard {
     if (confirmation) await this.mutate(() => this.api.scale(app.name, formation.type, Number(quantity), size, confirmation))
   }
 
+  async dynoAction(action) {
+    if (TABS[this.tab] !== 'Resources' || !this.writable()) return
+    const row = this.rows[this.main.selected]
+    if (!['formation', 'dyno'].includes(row?.kind)) {
+      this.setStatus(`Select a process type (${icons.resources}) or an individual dyno.`, 'warning')
+      return
+    }
+    const app = this.app
+    const scope = row.kind === 'formation' ? 'process' : 'dyno'
+    const target = scope === 'process' ? row.value.type : row.value.name
+    let effect
+    if (action === 'restart') effect = scope === 'process'
+      ? 'Heroku will restart every current dyno for this process type.'
+      : 'Heroku will restart this dyno.'
+    else if (scope === 'process') effect = 'Heroku stops the current dynos, but configured dynos restart automatically. Use s to scale the process to 0 to stop it permanently.'
+    else effect = 'Configured dynos restart automatically after being stopped. Stopping a one-off dyno terminates it.'
+    const confirmation = await this.confirm(app, `${action === 'stop' ? 'Stop' : 'Restart'} ${scope} ${target}.\n${effect}`)
+    if (confirmation) await this.mutate(() => this.api[action](app.name, target, scope, confirmation))
+  }
+
   async copyConfig() {
     if (TABS[this.tab] !== 'Config' || !this.app || !this.config || this.copying) return
     const row = this.rows[this.main.selected]
@@ -959,7 +981,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  s               Scale selected process in Overview / Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  s               Scale selected process in Overview / Resources\n  x / r           Stop / restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping configured dynos restarts them; scale a process to 0 to stop permanently.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
