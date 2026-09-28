@@ -3,9 +3,10 @@ import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import packageJSON from '../../package.json' with {type: 'json'}
 import {errorMessage} from '../api.js'
+import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {fetchTelemetry, metricsScope} from '../metrics.js'
-import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
+import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
@@ -18,9 +19,10 @@ const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode
 
 export class Dashboard {
   constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
-    fetchMetrics = (data, options) => fetchTelemetry(api, data, options)}) {
+    fetchMetrics = (data, options) => fetchTelemetry(api, data, options), executeHeroku = executeHerokuCommand,
+    executeInteractiveHeroku = executeInteractiveHerokuCommand}) {
     setTheme(theme)
-    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics})
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku})
     this.screen = screen ?? createScreen()
     this.tab = 0
     this.tabRanges = []
@@ -45,6 +47,8 @@ export class Dashboard {
     this.metricsRequestedAt = 0
     this.revealed = new Set()
     this.copying = false
+    this.commandRequest = null
+    this.interactiveRequest = null
     this.busy = false
     this.loading = new Map()
     this.loadingFrame = 0
@@ -79,8 +83,7 @@ export class Dashboard {
     this.detail = blessed.box({parent, top: '40%+7', bottom: 4, left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.overview}  Details `, padding: {left: 1, right: 1}, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}})
     this.status = blessed.box({parent, bottom: 2, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.muted, bg: palette.bg}})
-    this.footer = blessed.box({parent, bottom: 0, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.fg, bg: palette.panel},
-      content: `${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${[['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ['o', 'browser'], ['?', 'help'], ['q', 'quit']].map(([key, text]) => shortcut(key, text)).join('  ')}`})
+    this.footer = blessed.box({parent, bottom: 0, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
     this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: 'heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit'})
     this.screen.on('resize', () => this.render())
     this.screen.once('destroy', () => this.close())
@@ -162,6 +165,7 @@ export class Dashboard {
     key(['n'], () => void this.editConfig(true))
     key(['d'], () => void this.deleteConfig())
     key(['m'], () => void this.maintenance())
+    key([':'], () => void this.customCommand())
     key(['o'], () => this.openBrowser())
     key(['?'], () => this.help())
   }
@@ -250,6 +254,12 @@ export class Dashboard {
       return range
     }) : []
     this.tabs.setContent(this.app ? labels.join('  ') : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
+    const appContext = Boolean(this.app)
+    if (this.footerAppContext !== appContext) {
+      this.footerAppContext = appContext
+      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
+      this.footer.setContent(`${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${secondRow.map(([key, text]) => shortcut(key, text)).join('  ')}`)
+    }
     this.drawStatus()
     if (this.screen.width < 80 || this.screen.height < 24) { this.small.show(); this.small.setFront() }
     else this.small.hide()
@@ -689,6 +699,56 @@ export class Dashboard {
     return value
   }
 
+  confirmChoice(title, description) {
+    if (this.closed) return Promise.resolve(false)
+    return new Promise(resolve => {
+      const previous = this.screen.focused
+      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 13, ...frame(),
+        label: ` ${icons.warning}  ${single(title)} `, style: {...frame().style, border: {fg: palette.warning}}})
+      this.modal = modal
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: clean(description), tags: false,
+        style: {fg: palette.fg, bg: palette.bg}})
+      const button = (content, left, tone) => blessed.box({parent: modal, bottom: 1, left, width: 22, height: 3, ...frame(),
+        content, align: 'center', valign: 'middle', mouse: true, tags: false,
+        style: {...frame().style, fg: palette[tone], border: {fg: palette[tone]}}})
+      const proceed = button('Continue (y)', '25%-11', 'success')
+      const cancel = button('Cancel (n)', '75%-11', 'muted')
+      let selected = true
+      let finished = false
+      const select = value => {
+        selected = value
+        for (const [control, active] of [[proceed, selected], [cancel, !selected]]) {
+          const tone = active ? 'success' : 'muted'
+          control.style.fg = palette[tone]
+          control.style.border.fg = palette[tone]
+        }
+
+        this.render()
+      }
+      const finish = value => {
+        if (finished) return
+        finished = true
+        this.cancelPrompt = null
+        modal.destroy()
+        this.modal = null
+        if (!this.closed) { previous?.focus(); this.render() }
+        resolve(value)
+      }
+      this.cancelPrompt = () => finish(false)
+      modal.on('keypress', (_ch, key) => {
+        if (key.name?.toLowerCase() === 'y') finish(true)
+        if (key.name?.toLowerCase() === 'n' || key.name === 'escape') finish(false)
+        if (key.name === 'left') select(true)
+        if (key.name === 'right') select(false)
+        if (key.name === 'enter') finish(selected)
+      })
+      proceed.on('click', () => finish(true))
+      cancel.on('click', () => finish(false))
+      modal.focus()
+      this.render()
+    })
+  }
+
   async mutate(action) {
     // Lock navigation while a confirmed write is in flight. Its target and the
     // subsequent refresh must remain the app named in the confirmation.
@@ -776,6 +836,111 @@ export class Dashboard {
     if (confirmation) await this.mutate(() => this.api.maintenance(app.name, enabled, confirmation))
   }
 
+  async customCommand() {
+    if (!this.app || this.busy) return
+    if (this.demo) { this.setStatus('Heroku commands are disabled in the offline demo.', 'warning'); return }
+    if (this.api.readOnly) { this.setStatus('Read-only mode: custom Heroku commands are disabled.', 'warning'); return }
+    const app = this.app
+    const value = await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code'})
+    if (value === null) return
+    let args
+    try { args = scopedHerokuCommand(value, app.name) }
+    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
+    const invocation = formatHerokuCommand(args)
+    const interactive = isInteractiveHerokuCommand(args)
+    const confirmed = await this.confirmChoice('Confirm Heroku command', `${invocation}\n\nTarget: ${app.name}\nCustom CLI commands can modify remote resources.${interactive ? '\nThis command will temporarily take over the terminal.' : ''}`)
+    if (!confirmed) { this.setStatus('Command cancelled.'); return }
+    if (this.closed || this.app?.id !== app.id) return
+    if (interactive) await this.interactiveCommand(app, args, invocation)
+    else await this.commandPane(app, args, invocation)
+  }
+
+  async interactiveCommand(app, args, invocation) {
+    const previous = this.screen.focused
+    const controller = new AbortController()
+    const request = {controller}
+    const program = this.screen.program
+    const filteredInput = program.input
+    const source = filteredInput instanceof ThemeInput ? filteredInput.source : null
+    this.interactiveRequest = request
+    this.busy = true
+    this.setStatus(`Starting ${invocation}…`)
+    if (source) { source.unpipe(filteredInput); source.pause() }
+    const resume = program.pause()
+    let result
+    let failure
+    try {
+      result = await this.executeInteractiveHeroku(args, {signal: controller.signal})
+    } catch (error) {
+      failure = error
+    } finally {
+      if (this.interactiveRequest === request) this.interactiveRequest = null
+      this.busy = false
+      if (!this.screen.destroyed) {
+        resume()
+        if (source && !filteredInput.destroyed) source.pipe(filteredInput)
+        this.screen.realloc()
+        previous?.focus()
+        if (failure) this.setStatus(errorMessage(failure), 'error')
+        else if (result?.code === 0) this.setStatus('Interactive Heroku command completed.', 'success')
+        else this.setStatus(`Interactive Heroku command exited with ${result?.signal ?? `code ${result?.code}`}.`, 'warning')
+        this.render()
+      }
+    }
+  }
+
+  async commandPane(app, args, invocation) {
+    const previous = this.screen.focused
+    const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '90%', height: '85%', ...frame(),
+      label: ` ${icons.code}  Heroku CLI · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
+    const output = blessed.box({parent: modal, top: 1, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true,
+      tags: false, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
+    const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
+      content: `${shortcut('Esc / q', 'close and stop')}   ${shortcut('j/k', 'scroll')}\n${paint('Running…', 'info')}`, style: {fg: palette.muted, bg: palette.bg}})
+    const controller = new AbortController()
+    const request = {controller, modal}
+    this.commandRequest = request
+    this.modal = modal
+    let raw = `$ ${invocation}\n\n`
+    let result = null
+    const draw = chunk => {
+      if (this.closed || this.commandRequest !== request) return
+      raw = `${raw}${chunk}`.slice(-200_000)
+      output.setContent(ansi(raw))
+      output.setScrollPerc(100)
+      this.render()
+    }
+    const close = () => {
+      if (this.commandRequest !== request) return
+      controller.abort()
+      this.commandRequest = null
+      this.modal = null
+      modal.destroy()
+      if (!this.closed) {
+        previous?.focus()
+        if (result) this.setStatus(result.code === 0 ? 'Heroku command completed.' : `Heroku command exited with ${result.signal ?? `code ${result.code}`}.`, result.code === 0 ? 'success' : 'warning')
+        else this.setStatus('Heroku command stopped.', 'warning')
+      }
+    }
+    modal.key(['escape', 'q'], close)
+    output.key(['escape', 'q'], close)
+    output.focus()
+    draw('')
+    try {
+      result = await this.executeHeroku(args, {signal: controller.signal, onOutput: draw})
+      if (this.commandRequest !== request) return
+      const status = result.code === 0 ? 'Completed successfully.' : `Exited with ${result.signal ?? `code ${result.code}`}.`
+      footer.setContent(`${shortcut('Esc / q', 'close')}   ${shortcut('j/k', 'scroll')}\n${paint(status, result.code === 0 ? 'success' : 'warning')}`)
+      this.render()
+    } catch (error) {
+      if (this.commandRequest !== request) return
+      result = {code: null, signal: 'error'}
+      draw(`\n${errorMessage(error)}\n`)
+      footer.setContent(`${shortcut('Esc / q', 'close')}   ${shortcut('j/k', 'scroll')}\n${paint('Command failed to start.', 'error')}`)
+      this.render()
+    }
+  }
+
   openBrowser() {
     if (this.demo) { this.setStatus('Browser links are disabled in the offline demo.'); return }
     let url
@@ -794,7 +959,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  s               Scale selected process in Overview / Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nRemote changes require typing the exact target app name.\n--read-only disables every mutation at the API boundary.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  s               Scale selected process in Overview / Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
@@ -806,6 +971,10 @@ export class Dashboard {
     this.closed = true
     this.metricsRequest?.controller.abort()
     this.metricsRequest = null
+    this.commandRequest?.controller.abort()
+    this.commandRequest = null
+    this.interactiveRequest?.controller.abort()
+    this.interactiveRequest = null
     this.telemetry = null
     clearInterval(this.timer)
     this.loading.clear()
@@ -824,11 +993,12 @@ export async function runDashboard(options) {
   let dashboard
   const finished = new Promise(resolve => screen.once('destroy', () => { controller.abort(); resolve() }))
   const stop = () => { controller.abort(); if (dashboard) dashboard.close(); else screen.destroy() }
+  const interrupt = () => { if (!dashboard?.interactiveRequest) stop() }
   const startupKey = (_ch, key) => { if (key.full === 'C-c' || key.full === 'q') stop() }
   // Enable raw input while detecting the theme and allow immediate cancellation.
   screen.on('keypress', startupKey)
   process.once('SIGTERM', stop)
-  process.once('SIGINT', stop)
+  process.on('SIGINT', interrupt)
   try {
     const theme = await detectTerminalTheme({input: screen.program.input, output: screen.program.output,
       theme: options.theme, signal: controller.signal})
@@ -842,6 +1012,6 @@ export async function runDashboard(options) {
     else if (!screen.destroyed) screen.destroy()
     input?.destroy()
     process.removeListener('SIGTERM', stop)
-    process.removeListener('SIGINT', stop)
+    process.removeListener('SIGINT', interrupt)
   }
 }

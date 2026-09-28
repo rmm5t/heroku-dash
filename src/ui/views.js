@@ -4,7 +4,7 @@ import {addonDetails, dynoDetails} from './resource-details.js'
 import {TABLE_COLUMNS} from './columns.js'
 import {telemetryRows} from './telemetry.js'
 
-export {clean, single} from './text.js'
+export {ansi, clean, single} from './text.js'
 export function age(date, now = Date.now()) {
   const seconds = Math.max(0, Math.floor((now - Date.parse(date)) / 1000))
   if (!Number.isFinite(seconds)) return '—'
