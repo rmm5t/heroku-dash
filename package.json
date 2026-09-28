@@ -1,6 +1,6 @@
 {
   "name": "heroku-dash",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "A keyboard-driven terminal dashboard for Heroku",
   "author": "Ryan McGeary <ryan@mcgeary.org>",
   "homepage": "https://github.com/rmm5t/heroku-dash",
