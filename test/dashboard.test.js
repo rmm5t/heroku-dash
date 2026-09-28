@@ -7,9 +7,20 @@ import {createDemo, demoTelemetry} from '../src/demo.js'
 import {Dashboard} from '../src/ui/dashboard.js'
 import {clean} from '../src/ui/text.js'
 import {icons, palette} from '../src/ui/theme.js'
+import {TABS} from '../src/ui/views.js'
 
 const breadcrumbs = dashboard => clean(dashboard.header.content).split('\n')[1]
   .split(icons.chevron).map(part => part.trim().replace(/^\S+\s+/, ''))
+
+function tabCell(dashboard, screen, index, offset = 0) {
+  const {xi, xl, yi} = dashboard.tabs.lpos
+  const left = xi + dashboard.tabs.ileft
+  const y = yi + dashboard.tabs.itop
+  const cells = screen.lines[y].slice(left, xl - dashboard.tabs.iright)
+  const digit = cells.findIndex(cell => cell[1] === String(index + 1))
+  assert.ok(digit >= 0, `Tab ${index + 1} must be visible`)
+  return [left + digit + offset, y]
+}
 
 async function harness(t, override = {}) {
   const input = new PassThrough()
@@ -46,6 +57,89 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   await delay(50)
   assert.equal(d.app, null)
   assert.equal(d.rows[0].kind, 'app')
+})
+
+test('clicking tab numbers, icons, and labels switches views in full and compact layouts', async t => {
+  const {dashboard: d, screen, key, click} = await harness(t)
+  await key('\r')
+  for (const width of [160, 80, 120, 160]) {
+    screen.program.cols = width
+    screen.program.emit('resize')
+    d.render()
+    for (const index of [1, 2, 3, 4, 5, 6, 0]) {
+      await key('a') // Clicking a tab must transfer focus from the sidebar.
+      const offset = width === 160 ? (index % 3) * 2 : (index % 2) * 2
+      await click(...tabCell(d, screen, index, offset))
+      assert.equal(d.tab, index)
+      assert.equal(screen.focused, d.main)
+      assert.ok(d.main._label.content.includes(TABS[index]))
+      assert.ok(d.rows.length)
+      if (index === 3) assert.ok(d.config, 'Mouse activation loads config vars')
+      if (index === 6) assert.equal(d.telemetry.appId, d.app.id, 'Mouse activation loads metrics')
+    }
+  }
+})
+
+test('active tab clicks preserve selection and revealed values; tab gaps and non-left clicks are ignored', async t => {
+  const {dashboard: d, screen, key, click} = await harness(t)
+  await key('\r')
+  await key('4')
+  await key('v')
+  await key('j')
+  const selected = d.main.selected
+  const revealed = [...d.revealed]
+  await key('a')
+  await click(...tabCell(d, screen, 3))
+  assert.equal(screen.focused, d.main)
+  await click(...tabCell(d, screen, 3))
+  assert.equal(d.main.selected, selected)
+  assert.deepEqual([...d.revealed], revealed)
+
+  await key('a')
+  const {xi, xl, yi, yl} = d.tabs.lpos
+  const [x, y] = tabCell(d, screen, 0)
+  const [next] = tabCell(d, screen, 1)
+  for (const args of [[xi, y], [xi + 1, y], [x, yi], [x, yl - 1], [xl - 1, y], [xl - 2, y], [next - 1, y], [x, y, 'right'], [x, y, 'middle']]) {
+    await click(...args)
+    assert.equal(d.tab, 3)
+    assert.equal(screen.focused, d.nav)
+    assert.equal(d.main.selected, selected)
+    assert.deepEqual([...d.revealed], revealed)
+  }
+})
+
+test('tab clicks are inactive in the workspace, during prompts, and below the minimum terminal size', async t => {
+  const {dashboard: d, screen, key, click} = await harness(t)
+  await click(d.tabs.lpos.xi + d.tabs.ileft + 4, d.tabs.lpos.yi + d.tabs.itop)
+  assert.equal(d.app, null)
+  assert.equal(d.tab, 0)
+  await key('\r')
+  const target = tabCell(d, screen, 3)
+  await key('/')
+  const prompt = d.modal
+  const input = screen.focused
+  await click(...target)
+  assert.equal(d.tab, 0)
+  assert.equal(d.modal, prompt)
+  assert.equal(screen.focused, input)
+  await key('\x1b')
+
+  screen.program.cols = 80
+  screen.program.emit('resize')
+  d.render()
+  const compactTarget = tabCell(d, screen, 3)
+  const left = d.tabs.lpos.xi
+  screen.program.cols = 70
+  screen.program.emit('resize')
+  d.render()
+  assert.equal(d.small.visible, true)
+  await click(compactTarget[0] + d.tabs.lpos.xi - left, compactTarget[1])
+  assert.equal(d.tab, 0)
+  screen.program.cols = 140
+  screen.program.emit('resize')
+  d.render()
+  await click(...tabCell(d, screen, 3))
+  assert.equal(d.tab, 3)
 })
 
 for (const theme of ['dark', 'light']) test(`${theme} selection highlights follow keyboard and mouse focus with one purple marker`, async t => {

@@ -23,6 +23,7 @@ export class Dashboard {
     Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics})
     this.screen = screen ?? createScreen()
     this.tab = 0
+    this.tabRanges = []
     this.mode = 'pipelines'
     this.team = context.team ?? null
     this.breadcrumbTeam = null
@@ -63,7 +64,7 @@ export class Dashboard {
       content: VERSION, style: {fg: palette.muted, bg: palette.panel}})
     this.nav = blessed.list({parent, top: 3, bottom: 4, left: 0, width: SIDEBAR_WIDTH, ...frame(), label: ` ${icons.pipelines}  Pipelines `, keys: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, selected: {bold: true}, item: {fg: palette.fg, bg: palette.bg}}})
-    this.tabs = blessed.box({parent, top: 3, height: 3, left: SIDEBAR_WIDTH, right: 0, ...frame(), padding: {left: 1}, style: {...frame().style, fg: palette.accent}})
+    this.tabs = blessed.box({parent, top: 3, height: 3, left: SIDEBAR_WIDTH, right: 0, ...frame(), padding: {left: 1}, mouse: true, autoFocus: false, tags: false, style: {...frame().style, fg: palette.accent}})
     this.summary = blessed.box({parent, top: 6, height: 5, left: SIDEBAR_WIDTH, right: 0, padding: {left: 2, right: 1}, style: {fg: palette.fg, bg: palette.bg}})
     this.main = blessed.list({parent, top: 11, height: '40%-4', left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.apps}  Apps `, keys: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}, style: {...frame().style, item: {fg: palette.fg, bg: palette.bg}}})
@@ -83,6 +84,17 @@ export class Dashboard {
     this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: 'heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit'})
     this.screen.on('resize', () => this.render())
     this.screen.once('destroy', () => this.close())
+    this.tabs.on('click', mouse => {
+      if (this.closed || this.modal || this.small.visible || !this.app || mouse.button !== 'left') return
+      const pos = this.tabs.lpos
+      if (!pos || mouse.y !== pos.yi + this.tabs.itop || mouse.x >= pos.xl - this.tabs.iright) return
+      const x = mouse.x - pos.xi - this.tabs.ileft
+      const index = this.tabRanges.findIndex(range => x >= range.start && x < range.end)
+      if (index < 0) return
+      this.main.focus()
+      if (index !== this.tab) this.changeTab(index)
+      this.render()
+    })
     this.main.on('select item', () => {
       if (this.updatingRows) return
       this.drawDetail()
@@ -226,10 +238,19 @@ export class Dashboard {
     const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
       .filter(([, name]) => name).map(([icon, name]) => badge(icon, name, 'fg')).join(`  ${paint(icons.chevron, 'muted')}  `)
     this.header.setContent(`${paint(`${icons.heroku}  HEROKU DASH`, 'accent', true)}   ${this.demo ? `${badge('staging', 'DEMO', 'info')}   ` : ''}${this.api.readOnly ? badge('lock', 'READ ONLY', 'info') : badge('globe', 'READ / WRITE', 'success')}\n${scope || badge('globe', 'All accessible resources', 'muted')}`)
-    const tabs = compact => TABS.map((tab, i) => paint(i === this.tab ? `[${i + 1} ${icons[tabIcons[i]]} ${tab}]` : `${i + 1} ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, i === this.tab ? 'accent' : 'muted', i === this.tab)).join('  ')
+    const tabs = compact => TABS.map((tab, i) => paint(i === this.tab ? `[${i + 1} ${icons[tabIcons[i]]} ${tab}]` : `${i + 1} ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, i === this.tab ? 'accent' : 'muted', i === this.tab))
     const fullTabs = tabs(false)
-    const compact = blessed.unicode.strWidth(clean(fullTabs)) > this.tabs.width - 4
-    this.tabs.setContent(this.app ? compact ? tabs(true) : fullTabs : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
+    const compact = blessed.unicode.strWidth(clean(fullTabs.join('  '))) > this.tabs.width - 4
+    const labels = compact ? tabs(true) : fullTabs
+    let offset = 0
+    // Use the displayed labels' terminal-cell widths so hit areas stay aligned
+    // with icons, brackets, and compact labels after a resize or tab change.
+    this.tabRanges = this.app ? labels.map(label => {
+      const range = {start: offset, end: offset + blessed.unicode.strWidth(clean(label))}
+      offset = range.end + 2
+      return range
+    }) : []
+    this.tabs.setContent(this.app ? labels.join('  ') : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
     this.drawStatus()
     if (this.screen.width < 80 || this.screen.height < 24) { this.small.show(); this.small.setFront() }
     else this.small.hide()
