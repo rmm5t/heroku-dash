@@ -53,6 +53,10 @@ export function formatHerokuCommand(args) {
   return `heroku ${args.map(arg => /^[a-zA-Z0-9_./:=+-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`).join(' ')}`
 }
 
+export function isInteractiveHerokuCommand(args) {
+  return ['console', 'run'].includes(args[0]) && !args.includes('--no-tty')
+}
+
 export function executeHerokuCommand(args, {signal, onOutput = () => {}, spawnProcess = spawn,
   executable = process.env.HEROKU_BINPATH || (process.platform === 'win32' ? 'heroku.cmd' : 'heroku'), environment = process.env,
   platform = process.platform, killProcess = process.kill} = {}) {
@@ -86,6 +90,30 @@ export function executeHerokuCommand(args, {signal, onOutput = () => {}, spawnPr
       stream?.setEncoding('utf8')
       stream?.on('data', onOutput)
     }
+    signal?.addEventListener('abort', abort, {once: true})
+    child.once('error', error => finish(reject, error))
+    child.once('close', (code, exitSignal) => finish(resolve, {code, signal: exitSignal}))
+  })
+}
+
+export function executeInteractiveHerokuCommand(args, {signal, spawnProcess = spawn,
+  executable = process.env.HEROKU_BINPATH || (process.platform === 'win32' ? 'heroku.cmd' : 'heroku'), environment = process.env} = {}) {
+  if (signal?.aborted) return Promise.reject(new Error('Command cancelled.'))
+  return new Promise((resolve, reject) => {
+    const child = spawnProcess(executable, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: 'inherit',
+      env: {...environment},
+    })
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', abort)
+      callback(value)
+    }
+    const abort = () => child.kill('SIGTERM')
     signal?.addEventListener('abort', abort, {once: true})
     child.once('error', error => finish(reject, error))
     child.once('close', (code, exitSignal) => finish(resolve, {code, signal: exitSignal}))

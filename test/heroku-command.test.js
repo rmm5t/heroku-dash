@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {EventEmitter} from 'node:events'
 import {PassThrough} from 'node:stream'
 import test from 'node:test'
-import {executeHerokuCommand, formatHerokuCommand, scopedHerokuCommand} from '../src/heroku-command.js'
+import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../src/heroku-command.js'
 
 test('custom command parsing preserves quoted arguments and forces the current app', () => {
   assert.deepEqual(scopedHerokuCommand('logs --num "100" --source app', 'exact-app'),
@@ -22,6 +22,10 @@ test('the app selector is inserted before passthrough and cannot be overridden',
   assert.throws(() => scopedHerokuCommand('heroku', 'exact-app'), /Enter a Heroku command/)
   assert.throws(() => scopedHerokuCommand('dash', 'exact-app'), /cannot be launched/)
   assert.throws(() => scopedHerokuCommand('logs "unfinished', 'exact-app'), /Unterminated/)
+  assert.equal(isInteractiveHerokuCommand(['console', '--app', 'exact-app']), true)
+  assert.equal(isInteractiveHerokuCommand(['run', 'console', '--app', 'exact-app']), true)
+  assert.equal(isInteractiveHerokuCommand(['run', '--no-tty', 'rake', '--app', 'exact-app']), false)
+  assert.equal(isInteractiveHerokuCommand(['logs', '--tail', '--app', 'exact-app']), false)
 })
 
 test('command execution uses argv without a shell, streams output, and supports cancellation', async () => {
@@ -73,4 +77,22 @@ test('explicit color environment preferences are preserved', async () => {
   await running
   assert.equal(options.env.NO_COLOR, '1')
   assert.equal(options.env.FORCE_COLOR, undefined)
+})
+
+test('interactive command execution inherits the terminal and supports cancellation', async () => {
+  const child = new EventEmitter()
+  child.kill = signal => { queueMicrotask(() => child.emit('close', null, signal)); return true }
+  let call
+  const controller = new AbortController()
+  const running = executeInteractiveHerokuCommand(['run', 'console', '--app', 'exact-app'], {
+    executable: '/bin/heroku', environment: {PATH: '/bin'}, signal: controller.signal,
+    spawnProcess(command, args, options) { call = {command, args, options}; return child },
+  })
+  controller.abort()
+  assert.deepEqual(await running, {code: null, signal: 'SIGTERM'})
+  assert.equal(call.command, '/bin/heroku')
+  assert.deepEqual(call.args, ['run', 'console', '--app', 'exact-app'])
+  assert.equal(call.options.shell, false)
+  assert.equal(call.options.stdio, 'inherit')
+  assert.deepEqual(call.options.env, {PATH: '/bin'})
 })

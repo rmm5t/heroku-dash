@@ -675,6 +675,36 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   assert.match(d.message, /command completed/i)
 })
 
+test('interactive console commands temporarily take over and restore the terminal', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const calls = []
+  let screen
+  const executeInteractiveHeroku = async (args, options) => {
+    calls.push({args, signal: options.signal})
+    assert.equal(screen.program.isAlt, false)
+    assert.equal(screen.program.input.isPaused(), true)
+    return {code: 0, signal: null}
+  }
+  const result = await harness(t, {...demo, demo: false, executeInteractiveHeroku,
+    executeHeroku: async () => assert.fail('Interactive commands must not use captured output')})
+  const {dashboard: d, key} = result
+  screen = result.screen
+  await key('\r')
+  await key(':')
+  await key('console')
+  await key('\r')
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /temporarily take over the terminal/)
+  await key('\r')
+  assert.deepEqual(calls[0].args, ['console', '--app', 'constellation-staging'])
+  assert.equal(calls[0].signal.aborted, false)
+  assert.equal(screen.program.isAlt, true)
+  assert.equal(screen.program.input.isPaused(), false)
+  assert.equal(d.interactiveRequest, null)
+  assert.equal(d.busy, false)
+  assert.match(d.message, /Interactive Heroku command completed/)
+})
+
 test('custom commands support cancellation, button selection, and reject retargeting and unavailable modes', async t => {
   let calls = 0
   const {dashboard: d, screen, key, click} = await harness(t, {executeHeroku: async () => { calls++; return {code: 0, signal: null} }})
