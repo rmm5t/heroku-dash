@@ -23,6 +23,8 @@ test('read-only mode rejects every write before transport', async () => {
   let calls = 0
   const api = new HerokuAPI({async request() { calls++; return {body: {}} }}, {readOnly: true})
   await assert.rejects(api.scale('app', 'web', 2, 'Standard-1X', 'app'), /Read-only/)
+  await assert.rejects(api.stop('app', 'web', 'process', 'app'), /Read-only/)
+  await assert.rejects(api.restart('app', 'web.1', 'dyno', 'app'), /Read-only/)
   await assert.rejects(api.setConfig('app', 'KEY', 'value', 'app'), /Read-only/)
   await assert.rejects(api.maintenance('app', true, 'app'), /Read-only/)
   for (const method of ['PATCH', 'POST', 'DELETE', 'PUT', 'patch']) await assert.rejects(api.request('/apps/app', {method}), /Read-only/)
@@ -32,8 +34,12 @@ test('read-only mode rejects every write before transport', async () => {
 test('mutations validate confirmation, quantity, size, and config names', async () => {
   const api = new HerokuAPI({request() { assert.fail('Invalid action reached network') }})
   await assert.rejects(api.scale('production', 'web', 2, 'Standard-1X', 'staging'), /exact app name/)
+  await assert.rejects(api.stop('production', 'web', 'process', 'staging'), /exact app name/)
   for (const quantity of [-1, 1.5, NaN, Infinity, '2']) await assert.rejects(api.scale('app', 'web', quantity, 'Standard-1X', 'app'), /non-negative integer/)
   await assert.rejects(api.scale('app', 'web', 1, '', 'app'), /dyno size/)
+  await assert.rejects(api.stop('app', '', 'process', 'app'), /Select a process or dyno/)
+  await assert.rejects(api.stop('app', 'web', 'app', 'app'), /scope/)
+  await assert.rejects(api.dynoAction('app', 'web', 'process', 'delete', 'app'), /must be stop or restart/)
   await assert.rejects(api.setConfig('app', 'BAD-NAME', '', 'app'), /Config keys/)
   await assert.rejects(api.maintenance('app', 'true', 'app'), /boolean/)
 })
@@ -42,11 +48,19 @@ test('confirmed mutations target exactly the app and process requested', async (
   const calls = []
   const api = new HerokuAPI({async request(path, options) { calls.push({path, ...options}); return {body: {}} }})
   await api.scale('staging', 'web', 0, 'Standard-1X', 'staging')
+  await api.stop('staging', 'web', 'process', 'staging')
+  await api.restart('staging', 'worker', 'process', 'staging')
+  await api.stop('staging', 'web.1', 'dyno', 'staging')
+  await api.restart('staging', 'worker.2', 'dyno', 'staging')
   await api.setConfig('staging', 'EMPTY', '', 'staging')
   await api.setConfig('staging', 'DELETE', null, 'staging')
   await api.maintenance('staging', true, 'staging')
   assert.deepEqual(calls.map(c => [c.method, c.path, c.body]), [
     ['PATCH', '/apps/staging/formation/web', {quantity: 0, size: 'Standard-1X'}],
+    ['POST', '/apps/staging/formations/web/actions/stop', undefined],
+    ['DELETE', '/apps/staging/formations/worker', undefined],
+    ['POST', '/apps/staging/dynos/web.1/actions/stop', undefined],
+    ['DELETE', '/apps/staging/dynos/worker.2', undefined],
     ['PATCH', '/apps/staging/config-vars', {EMPTY: ''}],
     ['PATCH', '/apps/staging/config-vars', {DELETE: null}],
     ['PATCH', '/apps/staging', {maintenance: true}],

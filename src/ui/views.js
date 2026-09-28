@@ -78,17 +78,17 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
         const name = `  ${treeBranch} ${d.name}`
         rows.push(row(`${name}  ${d.state}  ${d.size}  ·  ${age(d.created_at)}`, lines([
           ['Dyno', d.name], ['Process', d.type], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
-          ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command],
+          ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command], ['Actions', '[x] stop   [r] restart'],
         ]) + dynoDetails(resources, 'instances', d.name), {id: `dyno:${d.name}`, kind: 'dyno', value: d, treeBranch, ...stateStyle(d.state), emphasis: d.state,
-          columns: [name, d.size, '—', d.state, age(d.created_at)]}))
+          columns: [name, d.size, '—', `${d.state} [x/r]`, age(d.created_at)]}))
       }
     }
     const appendProcess = f => {
-      rows.push(row(`${f.type.padEnd(16)} ${String(f.quantity).padStart(3)} × ${f.size}    [s] scale`, lines([
+      rows.push(row(`${f.type.padEnd(16)} ${String(f.quantity).padStart(3)} × ${f.size}    [s] scale  [x] stop  [r] restart`, lines([
         ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
-        ['Updated', f.updated_at], ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
+        ['Updated', f.updated_at], ['Actions', '[s] scale   [x] stop   [r] restart'],
       ]) + dynoDetails(resources, 'formations', f.type), {id: `formation:${f.type}`, kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', emphasis: f.type,
-        columns: [f.type, f.size, f.quantity, '[s] scale', '—']}))
+        columns: [f.type, f.size, f.quantity, '[s/x/r]', '—']}))
       appendDynos(byType.get(f.type) ?? [])
     }
     // Preserve the existing order within each partition and keep child dynos

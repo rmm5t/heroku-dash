@@ -108,6 +108,20 @@ export class HerokuAPI {
     return this.get(`/apps/${encode(app)}/formation/${encode(type)}`, {method: 'PATCH', body: {quantity, size: size.trim()}})
   }
 
+  async dynoAction(app, target, scope, action, confirmation) {
+    this.confirm(app, confirmation)
+    if (!target?.trim()) throw new Error('Select a process or dyno.')
+    if (!['process', 'dyno'].includes(scope)) throw new Error('Dyno action scope must be a process or dyno.')
+    if (!['stop', 'restart'].includes(action)) throw new Error('Dyno action must be stop or restart.')
+    const collection = scope === 'process' ? 'formations' : 'dynos'
+    const path = `/apps/${encode(app)}/${collection}/${encode(target)}`
+    return this.get(action === 'stop' ? `${path}/actions/stop` : path, {method: action === 'stop' ? 'POST' : 'DELETE'})
+  }
+
+  stop(app, target, scope, confirmation) { return this.dynoAction(app, target, scope, 'stop', confirmation) }
+
+  restart(app, target, scope, confirmation) { return this.dynoAction(app, target, scope, 'restart', confirmation) }
+
   async setConfig(app, key, value, confirmation) {
     this.confirm(app, confirmation)
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) throw new Error('Config keys must start with a letter or underscore and contain only letters, digits, and underscores.')
