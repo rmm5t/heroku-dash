@@ -121,7 +121,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | `Enter` | Open the selected item |
 | `Tab` / `Shift-Tab` | Focus the next / previous pane |
 | `/` | Filter sidebar names; submit an empty filter to clear |
-| `Esc` | Return to pipeline / workspace, clear a sidebar filter, or cancel a prompt |
+| `Esc` | Cancel a prompt or close keyboard help |
 | `1`–`7` | Select an app view |
 | `h` / `l`, `[` / `]`, `←` / `→` | Previous / next app view |
 | `R` / `g` | Refresh the current app, pipeline, or workspace catalog |

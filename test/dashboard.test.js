@@ -53,10 +53,10 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
     assert.equal(d.tab, tab - 1)
     assert.ok(d.rows.length)
   }
+  const app = d.app
   await key('\x1b')
-  await delay(50)
-  assert.equal(d.app, null)
-  assert.equal(d.rows[0].kind, 'app')
+  assert.equal(d.app, app)
+  assert.equal(d.tab, 6)
 })
 
 test('clicking tab numbers, icons, and labels switches views in full and compact layouts', async t => {
