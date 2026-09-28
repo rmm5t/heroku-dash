@@ -54,14 +54,16 @@ export function formatHerokuCommand(args) {
 }
 
 export function executeHerokuCommand(args, {signal, onOutput = () => {}, spawnProcess = spawn,
-  executable = process.env.HEROKU_BINPATH || (process.platform === 'win32' ? 'heroku.cmd' : 'heroku')} = {}) {
+  executable = process.env.HEROKU_BINPATH || (process.platform === 'win32' ? 'heroku.cmd' : 'heroku'), environment = process.env} = {}) {
   if (signal?.aborted) return Promise.reject(new Error('Command cancelled.'))
   return new Promise((resolve, reject) => {
+    const env = {...environment}
+    if (env.NO_COLOR === undefined && env.FORCE_COLOR === undefined) env.FORCE_COLOR = '1'
     const child = spawnProcess(executable, args, {
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {...process.env, NO_COLOR: '1', FORCE_COLOR: '0'},
+      env,
     })
     let settled = false
     const finish = (callback, value) => {

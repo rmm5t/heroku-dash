@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {createDemo, demoTelemetry} from '../src/demo.js'
-import {appRows, clean, operationalMetrics, TABS} from '../src/ui/views.js'
+import {ansi, appRows, clean, operationalMetrics, TABS} from '../src/ui/views.js'
 
 test('config values remain masked except the explicitly revealed variables', async () => {
   const {api, catalog} = createDemo()
@@ -49,6 +49,9 @@ test('operational metrics exclude one-off dynos from desired formation health', 
 test('remote text cannot inject terminal control sequences', () => {
   assert.equal(clean('\x1b[31mhello\x1b[0m\x07'), 'hello')
   assert.equal(clean('\x1b]52;c;secret\x07hello'), 'hello')
+  assert.equal(ansi('\x1b[31mred\x1b[0m\x1b[2J\x1b]52;c;secret\x07safe'), '\x1b[31mred\x1b[0msafe')
+  assert.equal(ansi('\x1b[38;2;10;20;30mtruecolor\x1b[m\x1b[1A'), '\x1b[38;2;10;20;30mtruecolor\x1b[m')
+  assert.equal(ansi('\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\'), 'link')
 })
 
 test('resource details distinguish process estimates, per-dyno rates, Eco, and unknown costs', async () => {

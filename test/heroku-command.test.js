@@ -38,7 +38,7 @@ test('command execution uses argv without a shell, streams output, and supports 
   const output = []
   const controller = new AbortController()
   const running = executeHerokuCommand(['logs', '--app', 'exact-app'], {
-    executable: '/bin/heroku', spawnProcess, signal: controller.signal, onOutput: chunk => output.push(chunk),
+    executable: '/bin/heroku', environment: {PATH: '/bin'}, spawnProcess, signal: controller.signal, onOutput: chunk => output.push(chunk),
   })
   child.stdout.write('standard output\n')
   child.stderr.write('standard error\n')
@@ -50,6 +50,20 @@ test('command execution uses argv without a shell, streams output, and supports 
   assert.deepEqual(calls[0].args, ['logs', '--app', 'exact-app'])
   assert.equal(calls[0].options.shell, false)
   assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe'])
-  assert.equal(calls[0].options.env.NO_COLOR, '1')
-  assert.equal(calls[0].options.env.FORCE_COLOR, '0')
+  assert.equal(calls[0].options.env.NO_COLOR, undefined)
+  assert.equal(calls[0].options.env.FORCE_COLOR, '1')
+})
+
+test('explicit color environment preferences are preserved', async () => {
+  const child = new EventEmitter()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.kill = () => true
+  let options
+  const running = executeHerokuCommand(['logs'], {
+    environment: {NO_COLOR: '1'}, spawnProcess(_command, _args, value) { options = value; queueMicrotask(() => child.emit('close', 0, null)); return child },
+  })
+  await running
+  assert.equal(options.env.NO_COLOR, '1')
+  assert.equal(options.env.FORCE_COLOR, undefined)
 })

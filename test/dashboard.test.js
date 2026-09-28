@@ -47,6 +47,7 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   const {dashboard: d, key} = await harness(t)
   assert.equal(d.rows[0].kind, 'app')
   assert.ok(!clean(d.footer.content).includes(': command'))
+  assert.ok(!clean(d.footer.content).includes('Esc back'))
   await key('\r')
   assert.equal(d.app.name, 'constellation-staging')
   assert.ok(clean(d.footer.content).includes(': command'))
@@ -643,10 +644,10 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   const calls = []
   const executeHeroku = async (args, options) => {
     calls.push({args, signal: options.signal})
-    options.onOutput('first line\n\x1b]52;c;hidden-value\x07second line\n')
+    options.onOutput('first line\n\x1b[31mred line\x1b[0m\n\x1b]52;c;hidden-value\x07second line\n')
     return execution.promise
   }
-  const {dashboard: d, key} = await harness(t, {...demo, demo: false, executeHeroku})
+  const {dashboard: d, screen, key} = await harness(t, {...demo, demo: false, executeHeroku})
   await key('\r')
   await key(':')
   assert.match(d.modal._label.content, /Heroku command.*constellation-staging/)
@@ -659,8 +660,12 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   await key('y')
   assert.deepEqual(calls[0].args, ['logs', '--num', '10', '--app', 'constellation-staging'])
   const output = d.modal.children.find(child => child.scrollable)
-  assert.match(output.content, /first line\nsecond line/)
+  assert.match(output.content, /first line\n\x1b\[31mred line\x1b\[0m\nsecond line/)
   assert.ok(!output.content.includes('hidden-value'))
+  const rendered = screen.lines.map(line => line.map(cell => cell[1]).join(''))
+  const y = rendered.findIndex(line => line.includes('red line'))
+  const x = rendered[y].indexOf('red line')
+  assert.equal((screen.lines[y][x][0] >> 9) & 0x1ff, blessed.colors.convert('red'))
   assert.equal(calls[0].signal.aborted, false)
   execution.resolve({code: 0, signal: null})
   await delay(20)

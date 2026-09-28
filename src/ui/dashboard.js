@@ -6,7 +6,7 @@ import {errorMessage} from '../api.js'
 import {executeHerokuCommand, formatHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {fetchTelemetry, metricsScope} from '../metrics.js'
-import {appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
+import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
@@ -854,7 +854,7 @@ export class Dashboard {
     const draw = chunk => {
       if (this.closed || this.commandRequest !== request) return
       raw = `${raw}${chunk}`.slice(-200_000)
-      output.setContent(clean(raw))
+      output.setContent(ansi(raw))
       output.setScrollPerc(100)
       this.render()
     }
