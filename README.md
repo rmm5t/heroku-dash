@@ -304,25 +304,25 @@ Without `--repo`, this uses the offline demo. Live terminal checks always pass `
 ### Layout
 
 ```text
-src/commands/dash.js   Command flags, authentication, startup
-src/project.js         Git context and pipeline resolution
-src/hierarchy.js       Team and pipeline parents for resource breadcrumbs
-src/api.js             Platform API reads, pagination, guarded writes
-src/resources.js       Optional adapter to the installed heroku-resources plugin
-src/metrics.js         GET-only telemetry, bucket normalization, and statistics
-src/ui/dashboard.js    Terminal navigation, prompts, refresh, lifecycle
-src/ui/views.js        View models, config masking, operational metrics
+src/commands/dash.js        Command flags, authentication, startup
+src/project.js              Git context and pipeline resolution
+src/hierarchy.js            Team and pipeline parents for resource breadcrumbs
+src/api.js                  Platform API reads, pagination, guarded writes
+src/resources.js            Optional adapter to the installed heroku-resources plugin
+src/metrics.js              GET-only telemetry, bucket normalization, and statistics
+src/ui/dashboard.js         Terminal navigation, prompts, refresh, lifecycle
+src/ui/views.js             View models, config masking, operational metrics
 src/ui/resource-details.js  Cost and capacity details and billing annotations
-src/ui/telemetry.js     Performance metric rows, sparklines, and sample details
-src/ui/details.js      Highlighted values and scroll-aware click targets
-src/ui/theme.js        Light/dark palettes, Nerd Font icons, and styled labels
-src/ui/terminal-theme.js  Terminal background detection and response filtering
-src/ui/text.js         Terminal-safe text sanitization
-src/demo.js            Offline demo data
-test/                  API, project, view, and keyboard integration tests
-scripts/               Explicit GET-only live and pseudo-terminal checks
+src/ui/telemetry.js         Performance metric rows, sparklines, and sample details
+src/ui/details.js           Highlighted values and scroll-aware click targets
+src/ui/theme.js             Light/dark palettes, Nerd Font icons, and styled labels
+src/ui/terminal-theme.js    Terminal background detection and response filtering
+src/ui/text.js              Terminal-safe text sanitization
+src/demo.js                 Offline demo data
+test/                       API, project, view, and keyboard integration tests
+scripts/                    Explicit GET-only live and pseudo-terminal checks
 ```
 
 ## License
 
-MIT
+[MIT License](https://rmm5t.mit-license.org/)
