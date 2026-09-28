@@ -19,6 +19,12 @@ export function cell(value, width, right = false) {
 }
 
 export const TABLE_COLUMNS = {
+  'Pipeline apps': [
+    {label: 'Stage', width: 11},
+    {label: 'App', min: 18, weight: 1},
+    {label: 'Region', width: 10},
+    {label: 'Stack', width: 12, hideBelow: 72},
+  ],
   Overview: [
     {label: 'Item / Process', min: 14, weight: 1, max: 24},
     {label: 'Size / Value', min: 10, weight: 3},
