@@ -1,6 +1,7 @@
 import {Command} from '@heroku-cli/command'
 import {Flags} from '@oclif/core'
 import {HerokuAPI} from '../api.js'
+import {appConfirmCommands} from '../heroku-command.js'
 import {inspectProject, resolveContext} from '../project.js'
 import {loadResourcesIntegration} from '../resources.js'
 
@@ -45,6 +46,7 @@ export default class Dash extends Command {
       if (!context.team) this.error(`Team not found: ${flags.team}`)
     }
     const resources = await loadResourcesIntegration(this.config, api)
-    await runDashboard({api, catalog, context, resources, refresh: flags.refresh, theme: flags.theme})
+    await runDashboard({api, catalog, context, resources, refresh: flags.refresh, theme: flags.theme,
+      appConfirm: appConfirmCommands(this.config.commands)})
   }
 }

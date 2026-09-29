@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {EventEmitter} from 'node:events'
 import {PassThrough} from 'node:stream'
 import test from 'node:test'
-import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../src/heroku-command.js'
+import {appConfirmCommands, executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../src/heroku-command.js'
 
 test('custom command parsing preserves quoted arguments and forces the current app', () => {
   assert.deepEqual(scopedHerokuCommand('logs --num "100" --source app', 'exact-app'),
@@ -26,6 +26,32 @@ test('the app selector is inserted before passthrough and cannot be overridden',
   assert.equal(isInteractiveHerokuCommand(['run', 'console', '--app', 'exact-app']), true)
   assert.equal(isInteractiveHerokuCommand(['run', '--no-tty', 'rake', '--app', 'exact-app']), false)
   assert.equal(isInteractiveHerokuCommand(['logs', '--tail', '--app', 'exact-app']), false)
+})
+
+test('verified app confirmations are injected and must match the current app', () => {
+  const appConfirm = appConfirmCommands([
+    {id: 'data:pg:upgrade:run', aliases: ['pg:advanced:upgrade'], flags: {app: {}, confirm: {char: 'c', description: 'pass in the app name to skip confirmation prompts'}}},
+    {id: 'pg:upgrade:run', flags: {app: {}, confirm: {char: 'c'}}},
+    {id: 'pg:copy', flags: {app: {}, confirm: {char: 'c'}}},
+    {id: 'spaces:destroy', flags: {confirm: {description: 'set to app name'}}},
+  ])
+  assert.deepEqual([...appConfirm], [
+    ['data:pg:upgrade:run', 'c'],
+    ['pg:advanced:upgrade', 'c'],
+    ['pg:upgrade:run', 'c'],
+  ])
+  assert.deepEqual(scopedHerokuCommand('pg:upgrade:run DATABASE_URL', 'exact-app', {appConfirm}),
+    ['pg:upgrade:run', 'DATABASE_URL', '--confirm', 'exact-app', '--app', 'exact-app'])
+  assert.deepEqual(scopedHerokuCommand('pg:upgrade:run DATABASE_URL --confirm=exact-app', 'exact-app', {appConfirm}),
+    ['pg:upgrade:run', 'DATABASE_URL', '--confirm=exact-app', '--app', 'exact-app'])
+  assert.deepEqual(scopedHerokuCommand('pg:upgrade:run DATABASE_URL -cexact-app', 'exact-app', {appConfirm}),
+    ['pg:upgrade:run', 'DATABASE_URL', '-cexact-app', '--app', 'exact-app'])
+  assert.deepEqual(scopedHerokuCommand('run -- pg:upgrade:run --confirm other', 'exact-app', {appConfirm}),
+    ['run', '--app', 'exact-app', '--', 'pg:upgrade:run', '--confirm', 'other'])
+  assert.throws(() => scopedHerokuCommand('pg:upgrade:run DATABASE_URL --confirm other', 'exact-app', {appConfirm}),
+    /--confirm must match the current app/)
+  assert.deepEqual(scopedHerokuCommand('pg:copy source::DATABASE target --confirm target', 'exact-app', {appConfirm}),
+    ['pg:copy', 'source::DATABASE', 'target', '--confirm', 'target', '--app', 'exact-app'])
 })
 
 test('command execution uses argv without a shell, streams output, and supports cancellation', async () => {

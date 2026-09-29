@@ -1,5 +1,7 @@
 import {spawn} from 'node:child_process'
 
+const APP_CONFIRM_COMPATIBILITY = new Set(['pg:upgrade:run'])
+
 function commandArguments(value) {
   const args = []
   let argument = ''
@@ -33,7 +35,21 @@ function commandArguments(value) {
   return args
 }
 
-export function scopedHerokuCommand(value, app) {
+export function appConfirmCommands(commands) {
+  const result = new Map()
+  for (const command of commands ?? []) {
+    const description = command.flags?.confirm?.description ?? ''
+    const confirmsApp = /\bapp(?:lication)?(?:'s)? name\b|\bname of (?:the )?app(?:lication)?\b/i.test(description)
+      || APP_CONFIRM_COMPATIBILITY.has(command.id)
+    if (!command.flags?.app || !command.flags?.confirm || !confirmsApp) continue
+    for (const id of [command.id, ...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]) {
+      result.set(id, command.flags.confirm.char ?? null)
+    }
+  }
+  return result
+}
+
+export function scopedHerokuCommand(value, app, {appConfirm = new Map()} = {}) {
   const args = commandArguments(value)
   if (/^(?:.*[\\/])?heroku(?:\.cmd|\.exe)?$/i.test(args[0] ?? '')) args.shift()
   if (!args.length) throw new Error('Enter a Heroku command, such as logs --num 100.')
@@ -45,7 +61,27 @@ export function scopedHerokuCommand(value, app) {
     || /^--(?:app|remote)=/.test(arg) || /^-[ar](?:=|\S)/.test(arg))) {
     throw new Error('App and remote selectors are not allowed; the current app is added automatically.')
   }
-  const index = separator < 0 ? args.length : separator
+  if (appConfirm.has(args[0])) {
+    const short = appConfirm.get(args[0])
+    const values = []
+    for (let offset = 0; offset < options.length; offset++) {
+      const argument = options[offset]
+      if (argument === '--confirm' || short && argument === `-${short}`) {
+        values.push(options[++offset])
+      } else if (argument.startsWith('--confirm=')) {
+        values.push(argument.slice('--confirm='.length))
+      } else if (short && argument.startsWith(`-${short}=`)) {
+        values.push(argument.slice(short.length + 2))
+      } else if (short && argument.startsWith(`-${short}`) && argument.length > 2) {
+        values.push(argument.slice(2))
+      }
+    }
+    if (values.some(confirm => confirm !== app)) {
+      throw new Error(`--confirm must match the current app: ${app}`)
+    }
+    if (!values.length) args.splice(separator < 0 ? args.length : separator, 0, '--confirm', app)
+  }
+  const index = args.indexOf('--') < 0 ? args.length : args.indexOf('--')
   return [...args.slice(0, index), '--app', app, ...args.slice(index)]
 }
 

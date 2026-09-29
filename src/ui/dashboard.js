@@ -16,13 +16,20 @@ const SIDEBAR_WIDTH = '22%'
 const VERSION = `v${packageJSON.version}`
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true, sendFocus: true})
+const descriptionContent = (description, highlightFirstLine) => {
+  const text = clean(description)
+  const newline = text.indexOf('\n')
+  return highlightFirstLine
+    ? `${paint(newline < 0 ? text : text.slice(0, newline), 'warning', true)}${newline < 0 ? '' : text.slice(newline)}`
+    : text
+}
 
 export class Dashboard {
   constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
     fetchMetrics = (data, options) => fetchTelemetry(api, data, options), executeHeroku = executeHerokuCommand,
-    executeInteractiveHeroku = executeInteractiveHerokuCommand}) {
+    executeInteractiveHeroku = executeInteractiveHerokuCommand, appConfirm = new Map()}) {
     setTheme(theme)
-    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku})
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku, appConfirm})
     this.screen = screen ?? createScreen()
     this.tab = 0
     this.tabRanges = []
@@ -672,13 +679,13 @@ export class Dashboard {
     this.render()
   }
 
-  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard'} = {}) {
+  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false} = {}) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
       const previous = this.screen.focused
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: 14, ...frame(), label: ` ${icons[secret ? 'lock' : icon]}  ${single(title)} `, style: {...frame().style, border: {fg: palette[tone]}}})
       this.modal = modal
-      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: clean(description), tags: false, style: {fg: palette.fg, bg: palette.bg}})
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false, style: {fg: palette.fg, bg: palette.bg}})
       const input = blessed.textbox({parent: modal, top: 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', 'clear')}`, style: {bg: palette.bg}})
       let finished = false
@@ -708,8 +715,8 @@ export class Dashboard {
     return true
   }
 
-  async confirm(app, description) {
-    const value = await this.prompt('Confirm remote change', `${description}\n\nTarget: ${app.name}\nType the exact app name to apply this change.`, '', {icon: 'warning', tone: 'warning'})
+  async confirm(app, description, {highlightFirstLine = false} = {}) {
+    const value = await this.prompt('Confirm remote change', `${description}\n\nTarget: ${app.name}\nType the exact app name to apply this change.`, '', {icon: 'warning', tone: 'warning', highlightFirstLine})
     if (value === null) { this.setStatus('Change cancelled.'); return null }
     if (value !== app.name) { this.setStatus('App name did not match. Nothing changed.', 'warning'); return null }
     return value
@@ -722,12 +729,7 @@ export class Dashboard {
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 13, ...frame(),
         label: ` ${icons.warning}  ${single(title)} `, style: {...frame().style, border: {fg: palette.warning}}})
       this.modal = modal
-      const text = clean(description)
-      const newline = text.indexOf('\n')
-      const content = highlightFirstLine
-        ? `${paint(newline < 0 ? text : text.slice(0, newline), 'warning', true)}${newline < 0 ? '' : text.slice(newline)}`
-        : text
-      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content, tags: false,
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const button = (content, left, tone) => blessed.box({parent: modal, bottom: 1, left, width: 22, height: 3, ...frame(),
         content, align: 'center', valign: 'middle', mouse: true, tags: false,
@@ -892,12 +894,19 @@ export class Dashboard {
     const value = await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code'})
     if (value === null) return
     let args
-    try { args = scopedHerokuCommand(value, app.name) }
+    try { args = scopedHerokuCommand(value, app.name, {appConfirm: this.appConfirm}) }
     catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
     const invocation = formatHerokuCommand(args)
     const interactive = isInteractiveHerokuCommand(args)
-    const confirmed = await this.confirmChoice('Confirm Heroku command', `${invocation}\n\nTarget: ${app.name}\nCustom CLI commands can modify remote resources.${interactive ? '\nThis command will temporarily take over the terminal.' : ''}`, {highlightFirstLine: true})
-    if (!confirmed) { this.setStatus('Command cancelled.'); return }
+    const appConfirmation = this.appConfirm.has(args[0])
+    const description = `${invocation}\n\nCustom CLI commands can modify remote resources.${interactive ? '\nThis command will temporarily take over the terminal.' : ''}`
+    const confirmed = appConfirmation
+      ? await this.confirm(app, description, {highlightFirstLine: true})
+      : await this.confirmChoice('Confirm Heroku command', `${description}\n\nTarget: ${app.name}`, {highlightFirstLine: true})
+    if (!confirmed) {
+      if (!appConfirmation) this.setStatus('Command cancelled.')
+      return
+    }
     if (this.closed || this.app?.id !== app.id) return
     if (interactive) await this.interactiveCommand(app, args, invocation)
     else await this.commandPane(app, args, invocation)

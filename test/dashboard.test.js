@@ -702,6 +702,39 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   assert.match(d.message, /command completed/i)
 })
 
+test('app-confirm commands inject the current app and require one exact-name confirmation', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const calls = []
+  const {dashboard: d, screen, key} = await harness(t, {...demo, demo: false,
+    appConfirm: new Map([['pg:upgrade:run', 'c']]),
+    executeHeroku: async args => { calls.push(args); return {code: 0, signal: null} }})
+  await key('\r')
+  await key(':')
+  await key('pg:upgrade:run DATABASE_URL')
+  await key('\r')
+  const invocation = 'heroku pg:upgrade:run DATABASE_URL --confirm constellation-staging --app constellation-staging'
+  assert.match(d.modal.children.map(child => child.content).join('\n'), new RegExp(invocation))
+  assert.match(d.modal._label.content, /Confirm remote change/)
+  assert.ok(!d.modal.children.some(child => child.content === 'Continue (y)'))
+  const confirmation = screen.lines.map(line => line.map(cell => cell[1]).join(''))
+  const confirmationY = confirmation.findIndex(line => line.includes(invocation))
+  const confirmationX = confirmation[confirmationY].indexOf(invocation)
+  assert.equal((screen.lines[confirmationY][confirmationX][0] >> 9) & 0x1ff, blessed.colors.convert(palette.warning))
+  await key('wrong-app')
+  await key('\r')
+  assert.equal(calls.length, 0)
+  assert.match(d.message, /App name did not match/)
+  await key(':')
+  await key('pg:upgrade:run DATABASE_URL --confirm constellation-staging')
+  await key('\r')
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(calls, [[
+    'pg:upgrade:run', 'DATABASE_URL', '--confirm', 'constellation-staging', '--app', 'constellation-staging',
+  ]])
+})
+
 test('interactive console commands temporarily take over and restore the terminal', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
