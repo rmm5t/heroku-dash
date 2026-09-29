@@ -30,7 +30,7 @@ async function harness(t, override = {}) {
   Object.assign(output, {isTTY: true, columns: 140, rows: 45})
   const screen = blessed.screen({input, output, terminal: 'xterm-256color', fullUnicode: true, smartCSR: false})
   const demo = createDemo()
-  const dashboard = new Dashboard({...demo, ...override, screen, refresh: 0})
+  const dashboard = new Dashboard({...demo, screen, refresh: 0, ...override})
   t.after(() => { dashboard.close(); input.destroy(); output.destroy() })
   await dashboard.start()
   return {dashboard, screen, input,
@@ -60,6 +60,28 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   await key('\x1b')
   assert.equal(d.app, app)
   assert.equal(d.tab, 6)
+})
+
+test('automatic refresh waits while the terminal is unfocused and catches up once on focus', async t => {
+  t.mock.timers.enable({apis: ['setInterval']})
+  const {dashboard: d, screen, key} = await harness(t, {refresh: 10})
+  await key('\r')
+  let refreshes = 0
+  d.loadApp = async automatic => { if (automatic) refreshes++ }
+
+  screen.program.emit('blur')
+  t.mock.timers.tick(20_000)
+  assert.equal(refreshes, 0)
+  assert.equal(d.refreshPending, true)
+
+  screen.program.emit('focus')
+  assert.equal(refreshes, 1)
+  assert.equal(d.refreshPending, false)
+  screen.program.emit('focus')
+  assert.equal(refreshes, 1)
+
+  t.mock.timers.tick(10_000)
+  assert.equal(refreshes, 2)
 })
 
 test('clicking tab numbers, icons, and labels switches views in full and compact layouts', async t => {

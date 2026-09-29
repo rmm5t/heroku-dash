@@ -15,7 +15,7 @@ import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 const SIDEBAR_WIDTH = '22%'
 const VERSION = `v${packageJSON.version}`
 const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
-const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true})
+const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true, sendFocus: true})
 
 export class Dashboard {
   constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
@@ -53,6 +53,8 @@ export class Dashboard {
     this.loading = new Map()
     this.loadingFrame = 0
     this.loadingTimer = null
+    this.terminalFocused = true
+    this.refreshPending = false
     this.closed = false
     this.filter = ''
     this.message = context.reason
@@ -86,6 +88,11 @@ export class Dashboard {
     this.footer = blessed.box({parent, bottom: 0, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
     this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: 'heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit'})
     this.screen.on('resize', () => this.render())
+    this.screen.on('blur', () => { this.terminalFocused = false })
+    this.screen.on('focus', () => {
+      this.terminalFocused = true
+      if (this.refreshPending) this.autoRefresh()
+    })
     this.screen.once('destroy', () => this.close())
     this.tabs.on('click', mouse => {
       if (this.closed || this.modal || this.small.visible || !this.app || mouse.button !== 'left') return
@@ -180,10 +187,16 @@ export class Dashboard {
     else this.drawLanding()
     const warnings = [...this.catalog.warnings, ...this.context.warnings ?? []]
     if (warnings.length) this.setStatus(warnings.join(' | '), 'warning')
-    if (this.refresh && !this.closed) this.timer = setInterval(() => {
-      if (this.app && !this.modal && !this.busy && !this.closed) void this.loadApp(true)
-    }, this.refresh * 1000)
+    if (this.refresh && !this.closed) this.timer = setInterval(() => this.autoRefresh(), this.refresh * 1000)
     this.render()
+  }
+
+  autoRefresh() {
+    if (!this.app || this.closed) return
+    if (!this.terminalFocused) { this.refreshPending = true; return }
+    if (this.modal || this.busy) return
+    this.refreshPending = false
+    void this.loadApp(true)
   }
 
   setStatus(message, tone = 'info') { this.message = single(message); this.messageTone = tone; this.render() }
@@ -387,6 +400,7 @@ export class Dashboard {
 
   async loadApp(automatic = false, {forceResources = false} = {}) {
     if (!this.app || this.busy || this.closed) return false
+    this.refreshPending = false
     const generation = this.generation
     const app = this.app
     this.busy = true
