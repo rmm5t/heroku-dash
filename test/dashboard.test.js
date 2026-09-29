@@ -810,19 +810,19 @@ test('read-only action keys do not open mutation prompts', async t => {
   }
 })
 
-test('Resources stops and restarts selected processes and dynos through confirmed API actions', async t => {
+test('Resources scales stopped processes to zero and restarts processes and dynos', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
   const writes = []
-  demo.api.stop = async (...args) => { writes.push(['stop', ...args]) }
+  demo.api.scale = async (...args) => { writes.push(['scale', ...args]) }
+  demo.api.stop = async () => assert.fail('The UI must not stop configured dynos directly')
   demo.api.restart = async (...args) => { writes.push(['restart', ...args]) }
   const {dashboard: d, key} = await harness(t, demo)
   await key('\r')
   await key('2')
   const cases = [
-    ['formation:web', 'x', 'Stop process web', ['stop', 'constellation-staging', 'web', 'process', 'constellation-staging']],
+    ['formation:web', 'x', 'Stop process web', ['scale', 'constellation-staging', 'web', 0, 'Standard-1X', 'constellation-staging']],
     ['formation:worker', 'r', 'Restart process worker', ['restart', 'constellation-staging', 'worker', 'process', 'constellation-staging']],
-    ['dyno:web.1', 'x', 'Stop dyno web.1', ['stop', 'constellation-staging', 'web.1', 'dyno', 'constellation-staging']],
     ['dyno:worker.1', 'r', 'Restart dyno worker.1', ['restart', 'constellation-staging', 'worker.1', 'dyno', 'constellation-staging']],
   ]
   for (const [id, keybinding, description, expected] of cases) {
@@ -830,12 +830,18 @@ test('Resources stops and restarts selected processes and dynos through confirme
     await key(keybinding)
     const prompt = d.modal.children.map(child => child.content).join('\n')
     assert.match(prompt, new RegExp(description))
-    if (keybinding === 'x') assert.match(prompt, /configured dynos restart automatically/i)
+    if (keybinding === 'x') assert.match(prompt, /scaling it from 2 × Standard-1X to 0 × Standard-1X/i)
     await key('constellation-staging')
     await key('\r')
     assert.deepEqual(writes.at(-1), expected)
     assert.equal(d.rows[d.main.selected].id, id)
   }
+  const before = writes.length
+  d.main.select(d.rows.findIndex(row => row.id === 'dyno:web.1'))
+  await key('x')
+  assert.equal(d.modal, null)
+  assert.equal(writes.length, before)
+  assert.match(d.message, /Individual dynos can only be restarted/)
 })
 
 test('Overview scales inactive and active process rows through the confirmed flow', async t => {

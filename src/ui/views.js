@@ -78,9 +78,9 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
         const name = `  ${treeBranch} ${d.name}`
         rows.push(row(`${name}  ${d.state}  ${d.size}  ·  ${age(d.created_at)}`, lines([
           ['Dyno', d.name], ['Process', d.type], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
-          ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command], ['Actions', '[x] stop   [r] restart'],
+          ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command], ['Actions', '[r] restart'],
         ]) + dynoDetails(resources, 'instances', d.name), {id: `dyno:${d.name}`, kind: 'dyno', value: d, treeBranch, ...stateStyle(d.state), emphasis: d.state,
-          columns: [name, d.size, '—', `${d.state} [x/r]`, age(d.created_at)]}))
+          columns: [name, d.size, '—', `${d.state} [r]`, age(d.created_at)]}))
       }
     }
     const appendProcess = f => {

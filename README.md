@@ -92,7 +92,7 @@ Single-click a tab's number, icon, or label to switch views and focus the resour
 
 Overview, Resources, Add-ons, Settings, and Metrics use aligned tables with fixed column headers and right-aligned quantities. Columns adapt to the terminal width; narrow layouts hide the Resources age and Add-ons service columns. Full values, including shortened names and hidden columns, remain available in Details.
 
-Resources groups dynos directly beneath their process type, with indented names in natural order (`web.1`, `web.2`, `web.10`). Active process groups (Qty > 0) appear first, followed by **Other dynos** for one-off and unmatched instances, then inactive process groups (Qty = 0) at the bottom. Each group's child dynos stay with their process. Select a process row to scale, stop, or restart all its dynos; select a child dyno to stop or restart that specific instance.
+Resources groups dynos directly beneath their process type, with indented names in natural order (`web.1`, `web.2`, `web.10`). Active process groups (Qty > 0) appear first, followed by **Other dynos** for one-off and unmatched instances, then inactive process groups (Qty = 0) at the bottom. Each group's child dynos stay with their process. Select a process row to scale, stop by scaling to zero, or restart all its dynos; select a child dyno to restart that specific instance.
 
 The heading shows the resource hierarchy: **team › pipeline › app**, including when you open an app or pipeline directly. Personal resources use **Personal**, and apps without a pipeline use **No pipeline**. Opening a resource resolves its parents without changing the sidebar's team filter.
 
@@ -105,7 +105,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | View | What you can do |
 | --- | --- |
 | **1 Overview** | Inspect app identity, team, region, stack, URLs, formation, and latest release |
-| **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale, stop, or restart processes and dynos; optionally view costs and CPU/RAM allocations |
+| **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale or stop processes and restart processes or dynos; optionally view costs and CPU/RAM allocations |
 | **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments; optionally view billed costs and capacity limits |
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Inspect domains, ACM state, buildpacks, region, stack, and space; toggle maintenance mode |
@@ -135,7 +135,7 @@ App actions:
 | Key | View | Action |
 | --- | --- | --- |
 | `s` | Overview / Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and dyno size |
-| `x` | Resources | Stop the selected process type or specific dyno |
+| `x` | Resources | Stop the selected process type by scaling it to zero |
 | `r` | Resources | Restart the selected process type or specific dyno |
 | `v` | Config | Reveal / hide the selected value |
 | `y` | Config | Copy the selected variable's full value to the clipboard, even when masked |
@@ -149,7 +149,7 @@ In prompts, `Enter` continues, `Esc` cancels, and `Ctrl-U` clears the input. Con
 
 ## Remote changes and config values
 
-Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Stopping a dyno that belongs to a scaled process causes Heroku to replace it automatically; scale the process to zero with `s` to stop it permanently. Stopping a one-off dyno terminates it. Config changes create a release and restart the app. Maintenance mode affects request serving.
+Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Pressing `x` on a process scales it to zero; use `s` to scale it back up. Individual dynos can be restarted but not stopped through the dashboard because Heroku automatically replaces stopped formation dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
 
 Press **`:`** while viewing an app to enter a Heroku CLI command without the leading `heroku`. Dash rejects `-a` / `--app` and `-r` / `--remote`, then adds `--app` with the exact current app before executing. The command runs without a shell and shows **Continue (y)** and **Cancel (n)** buttons because custom commands can modify remote resources. Press `y` or `n` to choose immediately, or use `←` / `→` and `Enter`; Continue is selected initially. Output streams into a scrollable floating pane with ANSI colors and text styles preserved; unsafe terminal controls are removed. `Esc` or `q` closes the pane and stops a running command.
 
