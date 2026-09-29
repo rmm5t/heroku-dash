@@ -24,6 +24,117 @@ const descriptionContent = (description, highlightFirstLine) => {
     : text
 }
 
+function enableReadline(input, history, render) {
+  let characters = [...input.getValue()]
+  let cursor = characters.length
+  let historyIndex = history.length
+  let draft = input.getValue()
+  let killed = ''
+  let viewStart = 0
+  const display = value => value.replaceAll('\t', input.screen.tabc)
+  const width = value => blessed.unicode.strWidth(display(value))
+  const updateCursor = () => {
+    if (input.screen.focused !== input) return
+    const position = input._getCoords()
+    if (!position) return
+    input.screen.program.cup(position.yi + input.itop,
+      position.xi + input.ileft + width(characters.slice(viewStart, cursor).join('')))
+  }
+  const refresh = () => {
+    const available = Math.max(1, input.width - input.iwidth - 1)
+    let used = 0
+    viewStart = cursor
+    const reserved = cursor < characters.length ? Math.min(available, width(characters[cursor])) : 0
+    while (viewStart > 0 && used + width(characters[viewStart - 1]) <= available - reserved) {
+      used += width(characters[--viewStart])
+    }
+    let viewEnd = cursor
+    while (viewEnd < characters.length && used + width(characters[viewEnd]) <= available) {
+      used += width(characters[viewEnd++])
+    }
+    const value = characters.join('')
+    input.value = value
+    input._value = value
+    input.setContent(display(characters.slice(viewStart, viewEnd).join('')))
+    render()
+    updateCursor()
+  }
+  const replace = value => {
+    characters = [...value]
+    cursor = characters.length
+    refresh()
+  }
+  const selectHistory = direction => {
+    if (!history.length) return
+    if (historyIndex === history.length) draft = characters.join('')
+    historyIndex = Math.max(0, Math.min(history.length, historyIndex + direction))
+    replace(historyIndex === history.length ? draft : history[historyIndex])
+  }
+  const previousWord = () => {
+    let index = cursor
+    while (index > 0 && /\s/.test(characters[index - 1])) index--
+    while (index > 0 && !/\s/.test(characters[index - 1])) index--
+    return index
+  }
+  const nextWord = () => {
+    let index = cursor
+    while (index < characters.length && /\s/.test(characters[index])) index++
+    while (index < characters.length && !/\s/.test(characters[index])) index++
+    return index
+  }
+  input.removeListener('resize', input.__updateCursor)
+  input.removeListener('move', input.__updateCursor)
+  input._updateCursor = updateCursor
+  input.__updateCursor = updateCursor
+  input.on('resize', updateCursor)
+  input.on('move', updateCursor)
+  input._listener = (ch, key) => {
+    if (key.name === 'enter' || key.name === 'return') { input._done(null, characters.join('')); return }
+    if (key.name === 'escape') { input._done(null, null); return }
+    if ((key.ctrl && key.name === 'a') || key.name === 'home') cursor = 0
+    else if ((key.ctrl && key.name === 'e') || key.name === 'end') cursor = characters.length
+    else if ((key.ctrl && key.name === 'b') || key.name === 'left') cursor = Math.max(0, cursor - 1)
+    else if ((key.ctrl && key.name === 'f') || key.name === 'right') cursor = Math.min(characters.length, cursor + 1)
+    else if (key.meta && key.name === 'b') cursor = previousWord()
+    else if (key.meta && key.name === 'f') cursor = nextWord()
+    else if ((key.ctrl && key.name === 'p') || key.name === 'up') { selectHistory(-1); return }
+    else if ((key.ctrl && key.name === 'n') || key.name === 'down') { selectHistory(1); return }
+    else if (key.ctrl && key.name === 't') {
+      if (cursor > 0 && characters.length > 1) {
+        const index = cursor === characters.length ? cursor - 2 : cursor - 1
+        const left = characters[index]
+        characters[index] = characters[index + 1]
+        characters[index + 1] = left
+        cursor = Math.min(characters.length, cursor + 1)
+      }
+    } else if (key.ctrl && key.name === 'u') {
+      killed = characters.splice(0, cursor).join('')
+      cursor = 0
+    } else if (key.ctrl && key.name === 'k') {
+      killed = characters.splice(cursor).join('')
+    } else if (key.ctrl && key.name === 'w') {
+      const index = previousWord()
+      killed = characters.splice(index, cursor - index).join('')
+      cursor = index
+    } else if (key.ctrl && key.name === 'y') {
+      const inserted = [...killed]
+      characters.splice(cursor, 0, ...inserted)
+      cursor += inserted.length
+    } else if ((key.ctrl && key.name === 'd') || key.name === 'delete') {
+      if (cursor < characters.length) characters.splice(cursor, 1)
+    } else if (key.meta && key.name === 'd') {
+      killed = characters.splice(cursor, nextWord() - cursor).join('')
+    } else if (key.name === 'backspace') {
+      if (cursor > 0) characters.splice(--cursor, 1)
+    } else if (ch && !/^[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]$/.test(ch)) {
+      const inserted = [...ch]
+      characters.splice(cursor, 0, ...inserted)
+      cursor += inserted.length
+    }
+    refresh()
+  }
+}
+
 export class Dashboard {
   constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
     fetchMetrics = (data, options) => fetchTelemetry(api, data, options), executeHeroku = executeHerokuCommand,
@@ -680,7 +791,7 @@ export class Dashboard {
     this.render()
   }
 
-  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history} = {}) {
+  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history, readline = false} = {}) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
       const previous = this.screen.focused
@@ -688,16 +799,8 @@ export class Dashboard {
       this.modal = modal
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false, style: {fg: palette.fg, bg: palette.bg}})
       const input = blessed.textbox({parent: modal, top: 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
-      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', 'clear')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
-      let historyIndex = history?.length ?? 0
-      let draft = initial
-      const selectHistory = direction => {
-        if (!history?.length) return
-        if (historyIndex === history.length) draft = input.getValue()
-        historyIndex = Math.max(0, Math.min(history.length, historyIndex + direction))
-        input.setValue(historyIndex === history.length ? draft : history[historyIndex])
-        this.render()
-      }
+      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', readline ? 'kill left' : 'clear')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
+      if (readline) enableReadline(input, history ?? [], () => this.render())
       let finished = false
       const finish = value => {
         if (finished) return
@@ -713,9 +816,7 @@ export class Dashboard {
       input.on('submit', value => finish(value))
       input.on('cancel', () => finish(null))
       input.key(['C-c'], () => this.close())
-      input.key(['C-u'], () => { input.clearValue(); historyIndex = history?.length ?? 0; draft = ''; this.render() })
-      input.key(['up'], () => selectHistory(-1))
-      input.key(['down'], () => selectHistory(1))
+      if (!readline) input.key(['C-u'], () => { input.clearValue(); this.render() })
       input.focus()
       this.render()
     })
@@ -728,7 +829,7 @@ export class Dashboard {
   }
 
   async confirm(app, description, {highlightFirstLine = false} = {}) {
-    const value = await this.prompt('Confirm remote change', `${description}\n\nTarget: ${app.name}\nType the exact app name to apply this change.`, '', {icon: 'warning', tone: 'warning', highlightFirstLine})
+    const value = await this.prompt('Confirm remote change', `${description}\n\nTarget: ${app.name}\nType the exact app name to apply this change.`, '', {icon: 'warning', tone: 'warning', highlightFirstLine, readline: true})
     if (value === null) { this.setStatus('Change cancelled.'); return null }
     if (value !== app.name) { this.setStatus('App name did not match. Nothing changed.', 'warning'); return null }
     return value
@@ -903,7 +1004,7 @@ export class Dashboard {
     if (this.demo) { this.setStatus('Heroku commands are disabled in the offline demo.', 'warning'); return }
     if (this.api.readOnly) { this.setStatus('Read-only mode: custom Heroku commands are disabled.', 'warning'); return }
     const app = this.app
-    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code', history: this.commandHistory.entries})
+    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code', history: this.commandHistory.entries, readline: true})
     if (value === null) return
     let args
     try { args = scopedHerokuCommand(value, app.name, {appConfirm: this.appConfirm}) }
@@ -1037,7 +1138,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
