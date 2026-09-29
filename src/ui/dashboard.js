@@ -892,6 +892,9 @@ export class Dashboard {
     this.interactiveRequest = request
     this.busy = true
     this.setStatus(`Starting ${invocation}…`)
+    // leave() flushes mouse and keypad resets before pause() suppresses output.
+    // Otherwise mouse-motion reports can leak into the child command's stdin.
+    this.screen.leave()
     if (source) { source.unpipe(filteredInput); source.pause() }
     const resume = program.pause()
     let result
@@ -906,6 +909,7 @@ export class Dashboard {
       if (!this.screen.destroyed) {
         resume()
         if (source && !filteredInput.destroyed) source.pipe(filteredInput)
+        this.screen.enter()
         this.screen.realloc()
         previous?.focus()
         if (failure) this.setStatus(errorMessage(failure), 'error')

@@ -15,8 +15,11 @@ function terminal(t, response) {
   Object.assign(source, {isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value }})
   const input = new ThemeInput(source)
   const queried = Promise.withResolvers()
+  const writes = []
   const output = new Writable({write(chunk, _encoding, callback) {
-    if (chunk.toString().includes('\x1b]11;?\x07')) {
+    const text = chunk.toString()
+    writes.push(text)
+    if (text.includes('\x1b]11;?\x07')) {
       queried.resolve()
       if (response) queueMicrotask(() => source.write(response))
     }
@@ -29,7 +32,7 @@ function terminal(t, response) {
   screen.on('render', () => {
     if (screen.children.some(child => child.content.includes('Pipeline loaded.'))) ready.resolve()
   })
-  return {source, input, screen, queried: queried.promise, ready: ready.promise}
+  return {source, input, screen, writes, queried: queried.promise, ready: ready.promise}
 }
 
 test('theme flag defaults to auto and validates explicit overrides', async () => {
@@ -67,6 +70,7 @@ test('interactive commands release and restore the filtered terminal input', {ti
     assert.deepEqual(args, ['console', '--app', 'constellation-staging'])
     assert.equal(io.source.isRaw, false)
     assert.equal(io.source.listenerCount('data'), 0)
+    assert.match(io.writes.join(''), /\x1b\[\?1003l/)
     started.resolve()
     await finished.promise
     return {code: 0, signal: null}
@@ -77,6 +81,7 @@ test('interactive commands release and restore the filtered terminal input', {ti
   await key(':')
   await key('console')
   await key('\r')
+  io.writes.length = 0
   await key('\r')
   await started.promise
   // Resolving the child models the process close emitted after EOF/Ctrl-D.
