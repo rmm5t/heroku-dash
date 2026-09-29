@@ -704,6 +704,38 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   assert.match(d.message, /command completed/i)
 })
 
+test('custom command prompt browses shared history and saves the confirmed command', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const added = []
+  const calls = []
+  const commandHistory = {
+    entries: ['config:get API_URL', 'logs --tail'],
+    async add(value) { added.push(value) },
+  }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false, commandHistory,
+    executeHeroku: async args => { calls.push(args); return {code: 0, signal: null} }})
+  await key('\r')
+  await key(':')
+  const input = d.modal.children.find(child => child.type === 'textbox')
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /↑\/↓ history/)
+  await key('draft command')
+  await key('\x1b[A')
+  assert.equal(input.getValue(), 'logs --tail')
+  await key('\x1b[A')
+  assert.equal(input.getValue(), 'config:get API_URL')
+  await key('\x1b[B')
+  assert.equal(input.getValue(), 'logs --tail')
+  await key('\x1b[B')
+  assert.equal(input.getValue(), 'draft command')
+  await key('\x1b[A')
+  await key('\r')
+  assert.deepEqual(added, [])
+  await key('\r')
+  assert.deepEqual(added, ['logs --tail'])
+  assert.deepEqual(calls, [['logs', '--tail', '--app', 'constellation-staging']])
+})
+
 test('app-confirm commands inject the current app and require one exact-name confirmation', async t => {
   const demo = createDemo()
   demo.api.readOnly = false

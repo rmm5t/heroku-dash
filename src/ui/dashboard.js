@@ -27,9 +27,9 @@ const descriptionContent = (description, highlightFirstLine) => {
 export class Dashboard {
   constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
     fetchMetrics = (data, options) => fetchTelemetry(api, data, options), executeHeroku = executeHerokuCommand,
-    executeInteractiveHeroku = executeInteractiveHerokuCommand, appConfirm = new Map()}) {
+    executeInteractiveHeroku = executeInteractiveHerokuCommand, appConfirm = new Map(), commandHistory = {entries: [], add() {}}}) {
     setTheme(theme)
-    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku, appConfirm})
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku, appConfirm, commandHistory})
     this.screen = screen ?? createScreen()
     this.tab = 0
     this.tabRanges = []
@@ -680,7 +680,7 @@ export class Dashboard {
     this.render()
   }
 
-  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false} = {}) {
+  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history} = {}) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
       const previous = this.screen.focused
@@ -688,7 +688,16 @@ export class Dashboard {
       this.modal = modal
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false, style: {fg: palette.fg, bg: palette.bg}})
       const input = blessed.textbox({parent: modal, top: 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
-      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', 'clear')}`, style: {bg: palette.bg}})
+      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', 'clear')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
+      let historyIndex = history?.length ?? 0
+      let draft = initial
+      const selectHistory = direction => {
+        if (!history?.length) return
+        if (historyIndex === history.length) draft = input.getValue()
+        historyIndex = Math.max(0, Math.min(history.length, historyIndex + direction))
+        input.setValue(historyIndex === history.length ? draft : history[historyIndex])
+        this.render()
+      }
       let finished = false
       const finish = value => {
         if (finished) return
@@ -704,7 +713,9 @@ export class Dashboard {
       input.on('submit', value => finish(value))
       input.on('cancel', () => finish(null))
       input.key(['C-c'], () => this.close())
-      input.key(['C-u'], () => { input.clearValue(); this.render() })
+      input.key(['C-u'], () => { input.clearValue(); historyIndex = history?.length ?? 0; draft = ''; this.render() })
+      input.key(['up'], () => selectHistory(-1))
+      input.key(['down'], () => selectHistory(1))
       input.focus()
       this.render()
     })
@@ -892,7 +903,7 @@ export class Dashboard {
     if (this.demo) { this.setStatus('Heroku commands are disabled in the offline demo.', 'warning'); return }
     if (this.api.readOnly) { this.setStatus('Read-only mode: custom Heroku commands are disabled.', 'warning'); return }
     const app = this.app
-    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code'})
+    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code', history: this.commandHistory.entries})
     if (value === null) return
     let args
     try { args = scopedHerokuCommand(value, app.name, {appConfirm: this.appConfirm}) }
@@ -909,6 +920,7 @@ export class Dashboard {
       return
     }
     if (this.closed || this.app?.id !== app.id) return
+    await this.commandHistory.add(value)
     if (interactive) await this.interactiveCommand(app, args, invocation)
     else await this.commandPane(app, args, invocation)
   }
