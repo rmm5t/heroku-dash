@@ -909,6 +909,8 @@ export class Dashboard {
     // leave() flushes mouse and keypad resets before pause() suppresses output.
     // Otherwise mouse-motion reports can leak into the child command's stdin.
     this.screen.leave()
+    program.clear()
+    program.flush()
     if (source) { source.unpipe(filteredInput); source.pause() }
     const resume = program.pause()
     let result
@@ -922,6 +924,8 @@ export class Dashboard {
       this.busy = false
       if (!this.screen.destroyed) {
         resume()
+        program.clear()
+        program.flush()
         if (source && !filteredInput.destroyed) source.pipe(filteredInput)
         this.screen.enter()
         this.screen.realloc()

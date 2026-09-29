@@ -717,6 +717,9 @@ test('interactive console commands temporarily take over and restore the termina
     executeHeroku: async () => assert.fail('Interactive commands must not use captured output')})
   const {dashboard: d, key} = result
   screen = result.screen
+  const clears = []
+  const clear = screen.program.clear.bind(screen.program)
+  screen.program.clear = () => { clears.push(screen.program.isAlt); return clear() }
   await key('\r')
   await key(':')
   await key('console')
@@ -725,6 +728,7 @@ test('interactive console commands temporarily take over and restore the termina
   await key('\r')
   assert.deepEqual(calls[0].args, ['console', '--app', 'constellation-staging'])
   assert.equal(calls[0].signal.aborted, false)
+  assert.deepEqual(clears.filter(isAlt => !isAlt), [false, false])
   assert.equal(screen.program.isAlt, true)
   assert.equal(screen.program.input.isPaused(), false)
   assert.equal(d.interactiveRequest, null)

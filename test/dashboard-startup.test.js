@@ -66,11 +66,14 @@ test('interactive commands release and restore the filtered terminal input', {ti
   demo.api.readOnly = false
   const started = Promise.withResolvers()
   const finished = Promise.withResolvers()
+  let clearsAtStart
   const running = runDashboard({...demo, screen: io.screen, refresh: 0, executeInteractiveHeroku: async args => {
     assert.deepEqual(args, ['console', '--app', 'constellation-staging'])
     assert.equal(io.source.isRaw, false)
     assert.equal(io.source.listenerCount('data'), 0)
     assert.match(io.writes.join(''), /\x1b\[\?1003l/)
+    clearsAtStart = io.writes.join('').split('\x1b[H\x1b[2J').length - 1
+    assert.ok(clearsAtStart > 0)
     started.resolve()
     await finished.promise
     return {code: 0, signal: null}
@@ -89,6 +92,7 @@ test('interactive commands release and restore the filtered terminal input', {ti
   await delay(30)
   assert.equal(io.source.isRaw, true)
   assert.ok(io.source.listenerCount('data') > 0)
+  assert.ok(io.writes.join('').split('\x1b[H\x1b[2J').length - 1 > clearsAtStart)
   await key('q')
   await running
 })
