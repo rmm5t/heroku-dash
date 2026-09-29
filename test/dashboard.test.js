@@ -47,10 +47,12 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   const {dashboard: d, key} = await harness(t)
   assert.equal(d.rows[0].kind, 'app')
   assert.ok(!clean(d.footer.content).includes(': command'))
+  assert.ok(!clean(d.footer.content).includes('C console'))
   assert.ok(!clean(d.footer.content).includes('Esc back'))
   await key('\r')
   assert.equal(d.app.name, 'constellation-staging')
   assert.ok(clean(d.footer.content).includes(': command'))
+  assert.ok(clean(d.footer.content).includes('C console'))
   for (let tab = 1; tab <= 7; tab++) {
     await key(String(tab))
     assert.equal(d.tab, tab - 1)
@@ -754,9 +756,7 @@ test('interactive console commands temporarily take over and restore the termina
   const clear = screen.program.clear.bind(screen.program)
   screen.program.clear = () => { clears.push(screen.program.isAlt); return clear() }
   await key('\r')
-  await key(':')
-  await key('console')
-  await key('\r')
+  await key('C')
   assert.match(d.modal.children.map(child => child.content).join('\n'), /temporarily take over the terminal/)
   await key('\r')
   assert.deepEqual(calls[0].args, ['console', '--app', 'constellation-staging'])

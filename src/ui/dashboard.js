@@ -182,6 +182,7 @@ export class Dashboard {
     key(['d'], () => void this.deleteConfig())
     key(['m'], () => void this.maintenance())
     key([':'], () => void this.customCommand())
+    key(['C', 'S-c'], () => void this.customCommand('console'))
     key(['o'], () => this.openBrowser())
     key(['?'], () => this.help())
   }
@@ -279,7 +280,7 @@ export class Dashboard {
     const appContext = Boolean(this.app)
     if (this.footerAppContext !== appContext) {
       this.footerAppContext = appContext
-      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
+      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
       this.footer.setContent(`${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${secondRow.map(([key, text]) => shortcut(key, text)).join('  ')}`)
     }
     this.drawStatus()
@@ -886,12 +887,12 @@ export class Dashboard {
     if (confirmation) await this.mutate(() => this.api.maintenance(app.name, enabled, confirmation))
   }
 
-  async customCommand() {
+  async customCommand(initialCommand) {
     if (!this.app || this.busy) return
     if (this.demo) { this.setStatus('Heroku commands are disabled in the offline demo.', 'warning'); return }
     if (this.api.readOnly) { this.setStatus('Read-only mode: custom Heroku commands are disabled.', 'warning'); return }
     const app = this.app
-    const value = await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code'})
+    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code'})
     if (value === null) return
     let args
     try { args = scopedHerokuCommand(value, app.name, {appConfirm: this.appConfirm}) }
@@ -1024,7 +1025,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()

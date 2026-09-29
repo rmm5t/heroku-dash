@@ -144,6 +144,7 @@ App actions:
 | `d` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
 | `:` | Any app view | Run a custom Heroku CLI command scoped to the current app |
+| `C` | Any app view | Open the default app console |
 
 In prompts, `Enter` continues, `Esc` cancels, and `Ctrl-U` clears the input. Config-value input is masked. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
 
