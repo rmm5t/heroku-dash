@@ -78,6 +78,15 @@ test('resource details distinguish process estimates, per-dyno rates, Eco, and u
   assert.ok(!instance.detail.includes('$0.00'))
 })
 
+test('Resources renders idle dynos as stopped and muted', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  data.dynos[0].state = 'idle'
+  const idle = appRows('Resources', data).find(row => row.id === `dyno:${data.dynos[0].name}`)
+  assert.equal(idle.icon, 'stopped')
+  assert.equal(idle.tone, 'muted')
+})
+
 test('Resources nests naturally sorted dynos under their process, retaining zero-scale and unmatched entries', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)
