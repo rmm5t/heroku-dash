@@ -31,6 +31,7 @@ test('read-only mode rejects every write before transport', async () => {
   await assert.rejects(api.promotePipelineApp({source: {name: 'source-app'}}, 'source-app'), /Read-only/)
   await assert.rejects(api.addDomain('app', 'www.example.com', true, 'app'), /Read-only/)
   await assert.rejects(api.removeDomain('app', {kind: 'custom', hostname: 'www.example.com'}, 'app'), /Read-only/)
+  await assert.rejects(api.clonePipelineConfig({destination: {name: 'destination'}}, 'destination'), /Read-only/)
   for (const method of ['PATCH', 'POST', 'DELETE', 'PUT', 'patch']) await assert.rejects(api.request('/apps/app', {method}), /Read-only/)
   assert.equal(calls, 0)
 })
@@ -235,6 +236,114 @@ test('domain removal scopes the DELETE to the confirmed app and selected domain'
   assert.deepEqual(calls.map(({path, method}) => [method, path]), [
     ['DELETE', '/apps/app/domains/domain-id'], ['DELETE', '/apps/app/domains/*.example.com'],
   ])
+})
+
+test('config cloning excludes HEROKU_* vars and initializes an empty destination with exact values', async () => {
+  const source = {id: 'source-id', name: 'source-app'}
+  const destination = {id: 'destination-id', name: 'destination-app'}
+  const pipeline = {id: 'pipeline-id'}
+  const configs = {
+    'source-id': {SHARED: 'source secret', EMPTY: '', MULTILINE: '  café\nquotes: "x" \'y\' $value\\path\n', HEROKU_APP_ID: source.id, HEROKU_RELEASE_VERSION: 'v10'},
+    'destination-id': {},
+  }
+  const originalSource = structuredClone(configs[source.id])
+  const writes = []
+  const api = new HerokuAPI({async request(path, options) {
+    if (path === '/pipelines/pipeline-id/pipeline-couplings') return {body: [source, destination].map(app => ({app: {id: app.id}}))}
+    const id = path.split('/')[2]
+    if (options.method === 'PATCH') {
+      writes.push({path, body: options.body, ifMatch: options.headers['If-Match']})
+      Object.assign(configs[id], options.body)
+    }
+    return {body: structuredClone(configs[id]), headers: {etag: '"empty-config"'}}
+  }})
+  const plan = await api.prepareConfigClone({pipeline, source, destination})
+  assert.equal(plan.skippedCount, 2)
+  assert.deepEqual(Object.keys(plan.values), ['SHARED', 'EMPTY', 'MULTILINE'])
+  assert.equal(await api.clonePipelineConfig(plan, destination.name), 3)
+  assert.deepEqual(writes, [{path: '/apps/destination-id/config-vars', body: plan.values, ifMatch: '"empty-config"'}])
+  assert.deepEqual(configs[source.id], originalSource)
+  assert.deepEqual(configs[destination.id], plan.values)
+})
+
+test('config cloning validates current-app confirmation and rechecks pipeline membership before the write', async () => {
+  const source = {id: 'source-id', name: 'source-app'}
+  const destination = {id: 'destination-id', name: 'destination-app'}
+  const pipeline = {id: 'pipeline-id'}
+  let members = [source, destination]
+  const calls = []
+  const api = new HerokuAPI({async request(path, options) {
+    calls.push({path, ...options})
+    assert.equal(options.method, 'GET', 'No write should reach transport')
+    return {body: path.endsWith('/pipeline-couplings') ? members.map(app => ({app: {id: app.id}})) : path.includes(destination.id) ? {} : {KEY: 'value'}}
+  }})
+  const plan = await api.prepareConfigClone({pipeline, source, destination})
+  calls.length = 0
+  await assert.rejects(api.clonePipelineConfig(plan, source.name), /exact app name/)
+  assert.equal(calls.length, 0)
+  members = [source]
+  await assert.rejects(api.clonePipelineConfig(plan, destination.name), /Both apps must belong/)
+  assert.equal(calls.length, 1)
+  calls.length = 0
+  await assert.rejects(api.prepareConfigClone({pipeline, source, destination: source}), /two different apps/)
+  assert.equal(calls.length, 0)
+})
+
+test('empty or invalid cloned config values cannot issue a PATCH or delete destination variables', async () => {
+  const api = new HerokuAPI({request() { assert.fail('Invalid config clone reached transport') }})
+  const plan = {pipeline: {id: 'pipe'}, source: {id: 'source'}, destination: {id: 'destination', name: 'destination-app'}}
+  await assert.rejects(api.clonePipelineConfig({...plan, values: {HEROKU_APP_ID: 'source'}}, 'destination-app'), /no config vars to clone/)
+  await assert.rejects(api.clonePipelineConfig({...plan, values: {KEY: null}}, 'destination-app'), /string values/)
+  await assert.rejects(api.clonePipelineConfig({...plan, values: {'BAD-KEY': 'value'}}, 'destination-app'), /valid keys/)
+})
+
+test('any destination key prevents cloning at preparation and immediately before applying', async () => {
+  const source = {id: 'source-id', name: 'source-app'}
+  const destination = {id: 'destination-id', name: 'destination-app'}
+  const pipeline = {id: 'pipeline-id'}
+  for (const config of [{EXISTING: 'value'}, {EMPTY: ''}, {HEROKU_APP_ID: destination.id}]) {
+    const paths = []
+    const api = new HerokuAPI({async request(path, options) {
+      paths.push(path)
+      assert.equal(options.method, 'GET', 'Existing config must never be overwritten')
+      return {body: path.endsWith('/pipeline-couplings') ? [source, destination].map(app => ({app: {id: app.id}})) : config}
+    }})
+    await assert.rejects(api.prepareConfigClone({pipeline, source, destination}), /current app has no config vars/)
+    assert.ok(!paths.includes('/apps/source-id/config-vars'), 'Do not read source secrets when the destination is populated')
+    await assert.rejects(api.clonePipelineConfig({pipeline, source, destination, values: {EXISTING: 'overwrite'}}, destination.name), /current app has no config vars/)
+    assert.ok(!Object.values(config).includes('overwrite'))
+  }
+})
+
+test('config added after preparation blocks cloning and leaves the new value intact', async () => {
+  const source = {id: 'source-id', name: 'source-app'}
+  const destination = {id: 'destination-id', name: 'destination-app'}
+  let config = {}
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(options.method, 'GET')
+    return {body: path.endsWith('/pipeline-couplings') ? [source, destination].map(app => ({app: {id: app.id}}))
+      : path.includes(source.id) ? {KEY: 'source-value'} : config}
+  }})
+  const plan = await api.prepareConfigClone({pipeline: {id: 'pipe'}, source, destination})
+  config = {KEY: 'added-during-confirmation'}
+  await assert.rejects(api.clonePipelineConfig(plan, destination.name), /current app has no config vars/)
+  assert.deepEqual(config, {KEY: 'added-during-confirmation'})
+})
+
+test('conditional cloning preserves a concurrent config change between the final read and write', async () => {
+  const source = {id: 'source-id', name: 'source-app'}
+  const destination = {id: 'destination-id', name: 'destination-app'}
+  const config = {}
+  const api = new HerokuAPI({async request(path, options) {
+    if (path.endsWith('/pipeline-couplings')) return {body: [source, destination].map(app => ({app: {id: app.id}}))}
+    if (options.method === 'GET') return {body: {}, headers: {etag: '"empty-config"'}}
+    config.KEY = 'concurrent-value'
+    if (options.headers['If-Match'] === '"empty-config"') throw Object.assign(new Error('Config changed'), {statusCode: 412})
+    Object.assign(config, options.body)
+    return {body: config}
+  }})
+  await assert.rejects(api.clonePipelineConfig({pipeline: {id: 'pipe'}, source, destination, values: {KEY: 'source-value'}}, destination.name), /Config changed/)
+  assert.deepEqual(config, {KEY: 'concurrent-value'})
 })
 
 test('app sections fail independently and config is fetched lazily', async () => {

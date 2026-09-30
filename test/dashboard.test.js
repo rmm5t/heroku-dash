@@ -754,6 +754,123 @@ test('y copies exact config values while masked, revealed, or empty in read-only
   assert.equal(d.message, 'Copied ZEMPTY to clipboard.')
 })
 
+test('Shift-Y clones from a pipeline app into the empty current app and keeps its Config masked', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const configs = {
+    'app-staging': {},
+    'app-production': {SECRET_COPY: 'copied-secret-value', EMPTY: '', MULTILINE: ' first line\nsecond line ', HEROKU_APP_ID: 'app-production'},
+  }
+  const writes = []
+  demo.api.config = async id => structuredClone(configs[id])
+  demo.api.prepareConfigClone = async ({pipeline, source, destination}) => ({pipeline, source, destination,
+    values: {SECRET_COPY: configs[source.id].SECRET_COPY, EMPTY: '', MULTILINE: configs[source.id].MULTILINE}, skippedCount: 1})
+  demo.api.clonePipelineConfig = async (plan, confirmation) => {
+    writes.push({plan, confirmation})
+    Object.assign(configs[plan.destination.id], plan.values)
+    return Object.keys(plan.values).length
+  }
+  const {dashboard: d, screen, key} = await harness(t, {...demo, demo: false})
+  await key('\r')
+  await key('4')
+  await key('Y')
+  const options = d.modal.children.find(child => child.type === 'list')
+  assert.deepEqual(options.items.map(item => item.content), ['constellation-production · production'])
+  await key('\r')
+  const confirmation = clean(d.modal.children.map(child => child.content).join('\n'))
+  assert.match(confirmation, /Clone 3 config vars: constellation-production → constellation-staging/)
+  assert.match(confirmation, /current app must have no config vars/)
+  assert.match(confirmation, /Target: constellation-staging/)
+  assert.ok(!confirmation.includes('copied-secret-value'))
+  assert.equal(writes.length, 0)
+  await key('constellation-staging')
+  await key('\r')
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].confirmation, 'constellation-staging')
+  assert.equal(writes[0].plan.source.id, 'app-production')
+  assert.equal(writes[0].plan.destination.id, 'app-staging')
+  assert.equal(d.app.name, 'constellation-staging')
+  assert.equal(TABS[d.tab], 'Config')
+  assert.equal(d.revealed.size, 0)
+  assert.equal(d.config.SECRET_COPY, 'copied-secret-value')
+  assert.ok(!screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n').includes('copied-secret-value'))
+  assert.equal(configs['app-production'].HEROKU_APP_ID, 'app-production')
+  assert.ok(!Object.hasOwn(d.config, 'HEROKU_APP_ID'))
+  assert.match(d.message, /Cloned 3 config vars/)
+})
+
+test('config cloning respects modes, cancellation, empty source, and current-app confirmation', async t => {
+  const {dashboard: d, key} = await harness(t)
+  d.api.config = async () => ({})
+  d.api.clonePipelineConfig = async () => assert.fail('Unconfirmed config clone')
+  d.api.prepareConfigClone = async options => ({...options, values: {KEY: 'secret'}, skippedCount: 0})
+  await key('\r')
+  await key('4')
+  await key('Y')
+  assert.match(d.message, /Read-only/)
+  d.api.readOnly = false
+  d.demo = true
+  await key('Y')
+  assert.match(d.message, /offline demo/)
+  d.demo = false
+  await key('Y')
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  await key('Y')
+  await key('\r')
+  await key('constellation-production')
+  await key('\r')
+  assert.match(d.message, /did not match/)
+  d.api.prepareConfigClone = async options => ({...options, values: {}, skippedCount: 2})
+  await key('Y')
+  await key('\r')
+  assert.match(d.message, /no config vars to clone/)
+  d.api.pipelineApps = async () => [d.app]
+  await key('Y')
+  assert.match(d.message, /no other apps/)
+  d.pipeline = null
+  await key('Y')
+  assert.match(d.message, /Open an app in a pipeline/)
+})
+
+test('config clone failure leaves the current empty app open and values masked', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  demo.api.config = async () => ({})
+  demo.api.prepareConfigClone = async options => ({...options, values: {SECRET_KEY: 'never-show-this'}, skippedCount: 0})
+  demo.api.clonePipelineConfig = async () => { throw new Error('Permission denied') }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('\r')
+  await key('4')
+  await key('Y')
+  await key('\r')
+  await key('constellation-staging')
+  await key('\r')
+  assert.equal(d.app.name, 'constellation-staging')
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+  assert.match(d.message, /Permission denied/)
+  assert.ok(!d.message.includes('never-show-this'))
+})
+
+test('Shift-Y rejects any populated current app before showing a source picker', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('\r')
+  await key('4')
+  d.api.pipelineApps = async () => assert.fail('No source picker lookup for a populated app')
+  d.api.clonePipelineConfig = async () => assert.fail('Existing config must never be overwritten')
+  for (const config of [{EXISTING: 'value'}, {EMPTY: ''}, {HEROKU_APP_ID: d.app.id}]) {
+    d.config = config
+    d.drawApp()
+    await key('Y')
+    assert.match(d.message, /current app has no config vars/)
+    assert.equal(d.modal, undefined)
+    assert.equal(d.config, config)
+  }
+})
+
 test('revealed detail values are cyan and only clicks on the value copy it', async t => {
   const copies = []
   const {dashboard: d, screen, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})

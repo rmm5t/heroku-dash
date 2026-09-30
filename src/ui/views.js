@@ -124,6 +124,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
   if (tab === 'Config') {
     if (configError) rows.push(row('Config vars unavailable', configError, {icon: 'error', tone: 'error', emphasis: 'unavailable'}))
     else if (!config) rows.push(row('Loading config vars…', 'Config vars are fetched only when you open this tab.', {icon: 'refresh', tone: 'info'}))
+    else if (!Object.keys(config).length) rows.push(row('No config vars', 'This app has no config vars.\n[Y] clone config vars from another app in this pipeline\n[n] new variable\nCloning requires the current app to remain empty.', {kind: 'empty-config', icon: 'lock', tone: 'muted'}))
     else for (const key of Object.keys(config).sort()) {
       const visible = revealed.has(key)
       const prefix = `${single(key)}\n\n`

@@ -24,6 +24,20 @@ export function normalizeHostname(value) {
   return `${wildcard ? '*.' : ''}${domain}`
 }
 
+function configCloneValues(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Config vars must be a key/value object.')
+  const entries = Object.entries(config).filter(([key]) => !key.startsWith('HEROKU_'))
+  if (entries.some(([key, value]) => !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) || typeof value !== 'string')) {
+    throw new Error('Source config vars must have valid keys and string values.')
+  }
+  return Object.fromEntries(entries)
+}
+
+function requireEmptyConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Config vars must be a key/value object.')
+  if (Object.keys(config).length) throw new Error('Config cloning is only allowed when the current app has no config vars.')
+}
+
 export function statusCode(error) {
   return error.statusCode ?? error.status ?? error.response?.statusCode ?? error.http?.statusCode ?? error.http?.http?.statusCode
 }
@@ -212,6 +226,40 @@ export class HerokuAPI {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) throw new Error('Config keys must start with a letter or underscore and contain only letters, digits, and underscores.')
     if (value !== null && typeof value !== 'string') throw new Error('Config values must be strings.')
     return this.get(`/apps/${encode(app)}/config-vars`, {method: 'PATCH', body: {[key]: value}})
+  }
+
+  async validateConfigCloneApps({pipeline, source, destination}) {
+    if (!pipeline?.id || !source?.id || !destination?.id || source.id === destination.id) {
+      throw new Error('Choose two different apps in the same pipeline.')
+    }
+    const couplings = await this.list(`/pipelines/${encode(pipeline.id)}/pipeline-couplings`)
+    if (![source, destination].every(app => couplings.some(coupling => coupling.app.id === app.id))) {
+      throw new Error('Both apps must belong to the selected pipeline. Refresh and try again.')
+    }
+  }
+
+  async prepareConfigClone({pipeline, source, destination}) {
+    await this.validateConfigCloneApps({pipeline, source, destination})
+    requireEmptyConfig(await this.config(destination.id))
+    const sourceConfig = await this.config(source.id)
+    const values = configCloneValues(sourceConfig)
+    return {pipeline, source, destination, values,
+      skippedCount: Object.keys(sourceConfig).length - Object.keys(values).length}
+  }
+
+  async clonePipelineConfig(plan, confirmation) {
+    this.confirm(plan.destination?.name, confirmation)
+    const values = configCloneValues(plan.values)
+    if (!Object.keys(values).length) throw new Error('There are no config vars to clone after excluding HEROKU_* variables.')
+    await this.validateConfigCloneApps(plan)
+    const path = `/apps/${encode(plan.destination.id)}/config-vars`
+    const snapshot = await this.request(path)
+    requireEmptyConfig(snapshot.body)
+    // Recheck emptiness immediately before writing. Where Heroku supplies an
+    // ETag, make the update conditional on that empty config snapshot as well.
+    const etag = snapshot.headers?.etag ?? snapshot.headers?.ETag
+    await this.get(path, {method: 'PATCH', body: values, ...(etag ? {headers: {'If-Match': etag}} : {})})
+    return Object.keys(values).length
   }
 
   async maintenance(app, enabled, confirmation) {

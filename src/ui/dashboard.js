@@ -305,6 +305,7 @@ export class Dashboard {
     key(['x'], () => void (TABS[this.tab] === 'Settings' ? this.removeDomain() : this.dynoAction('stop')))
     key(['r'], () => void this.dynoAction('restart'))
     key(['y'], () => void (TABS[this.tab] === 'Settings' ? this.copyDomainCNAME() : this.copyConfig()))
+    key(['Y', 'S-y'], () => void this.cloneConfigFromApp())
     key(['e'], () => void this.editConfig(false))
     key(['n'], () => void this.editConfig(true))
     key(['D', 'S-d'], () => void this.addDomain())
@@ -1177,6 +1178,49 @@ export class Dashboard {
     await this.copyValue(this.config[row.key], row.key)
   }
 
+  async cloneConfigFromApp() {
+    if (TABS[this.tab] !== 'Config' || !this.app || this.busy) return
+    if (this.demo) { this.setStatus('Config cloning is disabled in the offline demo.', 'warning'); return }
+    if (!this.writable()) return
+    if (!this.config || this.configError) { this.setStatus('Load or refresh Config before cloning config vars.', 'warning'); return }
+    if (Object.keys(this.config).length) { this.setStatus('Config cloning is only allowed when the current app has no config vars.', 'warning'); return }
+    if (!this.pipeline) { this.setStatus('Open an app in a pipeline to clone config vars from another app.', 'warning'); return }
+    const destination = this.app
+    const pipeline = this.pipeline
+    const generation = this.generation
+    const current = () => !this.closed && generation === this.generation && this.app?.id === destination.id && this.pipeline?.id === pipeline.id
+    const load = async (label, action) => {
+      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
+        content: `\n  ${badge('refresh', label, 'info')}`})
+      this.modal = modal
+      this.busy = true
+      const finishLoading = this.beginLoading('config-clone', label)
+      try { return await action() }
+      finally { modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    }
+    let apps
+    try { apps = await load('Loading source apps…', () => this.api.pipelineApps(pipeline.id)) }
+    catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    if (!current()) return
+    const sources = apps.filter(app => app.id !== destination.id)
+    if (!sources.length) { this.setStatus('There are no other apps in this pipeline to clone config vars from.', 'warning'); return }
+    const source = await this.choose(`Clone Config · ${destination.name}`, `Pipeline: ${pipeline.name}\nChoose the app to clone config vars from into the current app.`,
+      sources.map(app => ({label: `${app.name} · ${app.stage}`, value: app})))
+    if (source === null || !current()) return
+    let plan
+    try { plan = await load('Preparing config clone…', () => this.api.prepareConfigClone({pipeline, source, destination})) }
+    catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    if (!current()) return
+    const count = Object.keys(plan.values).length
+    if (!count) { this.setStatus('There are no config vars to clone after excluding HEROKU_* variables.', 'warning'); return }
+    const confirmation = await this.confirm(destination,
+      `Clone ${count} config vars: ${source.name} → ${destination.name}\nPipeline: ${pipeline.name}\nThe current app must have no config vars.\nSkip ${plan.skippedCount} HEROKU_* vars.\nThis creates a release and restarts the current app.`, {highlightFirstLine: true})
+    if (!confirmation || !current()) return
+    await this.mutate(() => this.api.clonePipelineConfig(plan, confirmation), {
+      successMessage: `Cloned ${count} config vars from ${source.name} into ${destination.name}. Config refreshed.`,
+    })
+  }
+
   async copyDomainCNAME() {
     if (TABS[this.tab] !== 'Settings' || !this.app || this.copying) return
     const row = this.rows[this.main.selected]
@@ -1415,7 +1459,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process in Resources / remove domain in Settings\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  e / n / d       Replace / create / delete config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process in Resources / remove domain in Settings\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n / d       Replace / create / delete config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })

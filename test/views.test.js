@@ -17,6 +17,17 @@ test('config values remain masked except the explicitly revealed variables', asy
   assert.ok(multiple.includes('secret1') && multiple.includes('secret2') && !multiple.includes('secret3'))
 })
 
+test('Config offers incoming cloning only in the empty state', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  const empty = appRows('Config', data, {config: {}})
+  assert.equal(empty[0].kind, 'empty-config')
+  assert.match(empty[0].detail, /\[Y\] clone config vars from another app/)
+  for (const config of [{KEY: ''}, {HEROKU_APP_ID: 'app-id'}]) {
+    assert.ok(!appRows('Config', data, {config})[0].detail.includes('[Y]'))
+  }
+})
+
 test('all views render demo data and errors without exposing config inadvertently', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)

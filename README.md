@@ -141,6 +141,7 @@ App actions:
 | `r` | Resources | Restart the selected process type or specific dyno |
 | `v` | Config | Reveal / hide the selected value |
 | `y` | Config | Copy the selected variable's full value to the clipboard, even when masked |
+| `Y` / `Shift-Y` | Config | Clone non-`HEROKU_*` config vars from another pipeline app into the current app, only when its Config is empty |
 | `e` | Config | Replace the selected variable's value |
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
 | `d` | Config | Delete the selected variable |
@@ -174,6 +175,8 @@ Press **`:`** while viewing an app to enter a Heroku CLI command without the lea
 Config values are fetched only when opening Config. Press `v` to reveal or hide the selected variable independently of the others. Moving between rows keeps revealed values visible, so you can inspect several at once. Switching views/apps or manually refreshing hides them all again. The plugin keeps fetched values in memory for the selected app and does not write config values to disk. Automatic refresh updates operational app data; use `R` to refresh config values.
 
 Press **`y`** to copy the selected variable's value without revealing it. Revealed values appear in **cyan** in the Details pane; **click the highlighted value** to copy it. Clicking any wrapped or multiline portion copies the complete value. Empty values show a clickable `(empty value)` placeholder. Copying preserves whitespace, Unicode, and multiline content, and works in `--read-only` mode. The status bar confirms the variable name without displaying its value.
+
+In **4 Config**, press **`Y`** (`Shift-Y`) to clone config vars **into the current app**, only when it has no config vars at all. Choose a source app in the same pipeline, review the variable count, and type the **current app’s exact name** to confirm. Following [Heroku’s config-copy guide](https://help.heroku.com/ZLU6JD4J/how-to-copy-config-vars-from-one-app-to-another), source `HEROKU_*` variables are excluded. The current app’s emptiness is checked again before applying the clone; any existing key, including a `HEROKU_*` key or an empty-string value, prevents cloning. Values are sent through a single JSON API update, preserving multiline values, whitespace, quotes, and empty strings without showing them in the dialog. The current app gets a release and restarts, and its Config view refreshes with values masked. This action is disabled in read-only and demo modes.
 
 Clipboard access uses the system clipboard on the machine running `dash` (macOS, Windows, or a Linux desktop). On Wayland, install `wl-clipboard`; X11 uses `xsel`, with a bundled fallback. A desktop clipboard must be accessible to the terminal; headless/SSH sessions without one show a copy error instead.
 
