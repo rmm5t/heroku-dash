@@ -66,6 +66,36 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.tab, 6)
 })
 
+test('exact-app confirmation instructions remain visible when long descriptions scroll and the terminal resizes', async t => {
+  const {dashboard: d, screen, key} = await harness(t)
+  await key('\r')
+  const app = d.app
+  const confirmation = d.confirm(app, Array.from({length: 40}, (_, index) => `Change ${index}: ${'Long description '.repeat(8)}`).join('\n'))
+  await delay(15)
+  const description = d.modal.children.find(child => child.scrollable)
+  const instructions = d.modal.children.find(child => clean(child.content).includes('Type the exact app name'))
+  const input = d.modal.children.find(child => child.type === 'textbox')
+  assert.equal(instructions.scrollable, undefined)
+  assert.ok(!description.content.includes('Type the exact app name'))
+  for (const [width, height] of [[140, 45], [80, 24]]) {
+    screen.program.cols = width
+    screen.program.rows = height
+    screen.program.emit('resize')
+    for (const scroll of [0, 1000]) {
+      description.setScroll(scroll)
+      d.render()
+      const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+      assert.ok(visible.includes(`Target: ${app.name}`))
+      assert.ok(visible.includes('Type the exact app name above to apply this change.'))
+      assert.ok(instructions.lpos.yl <= input.lpos.yi)
+      assert.ok(input.lpos.yl <= d.modal.lpos.yl)
+    }
+  }
+  await key(app.name)
+  await key('\r')
+  assert.equal(await confirmation, app.name)
+})
+
 test('Ctrl-N and Ctrl-P move lists and scroll focused panes without changing context', async t => {
   const {dashboard: d, key} = await harness(t)
   const pipeline = d.pipeline

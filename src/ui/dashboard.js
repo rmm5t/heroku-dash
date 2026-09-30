@@ -811,15 +811,18 @@ export class Dashboard {
     this.render()
   }
 
-  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history, readline = false} = {}) {
+  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history, readline = false, confirmationApp} = {}) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
       const previous = this.screen.focused
-      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: 14, ...frame(), label: ` ${icons[secret ? 'lock' : icon]}  ${single(title)} `, style: {...frame().style, border: {fg: palette[tone]}}})
+      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: confirmationApp ? 17 : 14, ...frame(), label: ` ${icons[secret ? 'lock' : icon]}  ${single(title)} `, style: {...frame().style, border: {fg: palette[tone]}}})
       this.modal = modal
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false,
         scrollable: true, mouse: true, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
-      const input = blessed.textbox({parent: modal, top: 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
+      if (confirmationApp) blessed.box({parent: modal, top: 8, left: 2, right: 2, height: 2, tags: false,
+        content: `Target: ${paint(single(confirmationApp), 'warning', true)}\nType the exact app name above to apply this change.`,
+        style: {fg: palette.warning, bg: palette.bg}})
+      const input = blessed.textbox({parent: modal, top: confirmationApp ? 11 : 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', readline ? 'kill left' : 'clear')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
       if (readline) enableReadline(input, history ?? [], () => this.render())
       let finished = false
@@ -850,7 +853,7 @@ export class Dashboard {
   }
 
   async confirm(app, description, {highlightFirstLine = false} = {}) {
-    const value = await this.prompt('Confirm remote change', `${description}\n\nTarget: ${app.name}\nType the exact app name to apply this change.`, '', {icon: 'warning', tone: 'warning', highlightFirstLine, readline: true})
+    const value = await this.prompt('Confirm remote change', description, '', {icon: 'warning', tone: 'warning', highlightFirstLine, readline: true, confirmationApp: app.name})
     if (value === null) { this.setStatus('Change cancelled.'); return null }
     if (value !== app.name) { this.setStatus('App name did not match. Nothing changed.', 'warning'); return null }
     return value
