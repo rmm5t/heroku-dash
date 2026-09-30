@@ -227,6 +227,106 @@ test('Add App locks its pipeline target during creation and handles refresh fail
   assert.ok(d.catalog.apps.some(app => app.id === 'locked-id'))
 })
 
+for (const appContext of [false, true]) test(`Shift-P promotes from ${appContext ? 'an app view' : 'the pipeline workspace'} and tracks destinations`, async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const writes = []
+  const apps = await demo.api.pipelineApps()
+  const completion = Promise.withResolvers()
+  let signal
+  demo.api.promotePipelineApp = async (options, confirmation) => { writes.push({options, confirmation}); return {id: 'promotion-id'} }
+  demo.api.waitForPromotion = async (_promotion, targets, options) => {
+    signal = options.signal
+    options.onUpdate(targets.map(app => ({app: {id: app.id}, status: 'pending'})))
+    await completion.promise
+    return targets.map(app => ({app: {id: app.id}, status: 'succeeded'}))
+  }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  if (appContext) await key('\r')
+  assert.match(clean(d.footer.content), /P promote/)
+  await key('P')
+  assert.match(d.modal._label.content, /Promote.*constellation-staging/)
+  assert.deepEqual(d.modal.children.find(child => child.type === 'list').items.map(item => item.content), ['production · constellation-production'])
+  await key('\r')
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Destinations: constellation-production/)
+  assert.equal(writes.length, 0)
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [{options: {pipeline: demo.context.pipeline, source: apps[0], stage: 'production', targets: [apps[1]]}, confirmation: 'constellation-staging'}])
+  assert.match(clean(d.modal.content), /constellation-production: pending/)
+  assert.equal(d.busy, true)
+  await key('a')
+  assert.equal(Boolean(d.app), appContext)
+  completion.resolve()
+  await delay(20)
+  assert.match(d.message, /Promoted constellation-staging to production/)
+  assert.equal(d.messageTone, 'success')
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+  assert.equal(signal.aborted, false)
+  if (appContext) assert.equal(d.app.name, 'constellation-staging')
+  else assert.equal(d.rows[d.main.selected].value.name, 'constellation-staging')
+})
+
+test('promotion rejects read-only/demo modes, cancellation, wrong confirmation, and missing higher stages', async t => {
+  let writes = 0
+  const {dashboard: d, key} = await harness(t)
+  d.api.promotePipelineApp = async () => { writes++; assert.fail('Unconfirmed promotion') }
+  await key('P')
+  assert.match(d.message, /Read-only/)
+  d.api.readOnly = false
+  d.demo = true
+  await key('P')
+  assert.match(d.message, /offline demo/)
+  d.demo = false
+  await key('P')
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  await key('P')
+  await key('\r')
+  await key('wrong-app')
+  await key('\r')
+  assert.match(d.message, /did not match/)
+  await key('\x0e')
+  await key('P')
+  assert.match(d.message, /no higher stage/)
+  await key('\x10')
+  d.api.pipelineApps = async () => [{id: 'app-staging', name: 'constellation-staging', stage: 'staging'}]
+  await key('P')
+  assert.match(d.message, /no apps in a higher stage/)
+  assert.equal(writes, 0)
+})
+
+test('promotion reports partial deployment failure and stops local polling on close', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  demo.api.promotePipelineApp = async () => ({id: 'promotion-id'})
+  demo.api.waitForPromotion = async () => [{app: {id: 'app-production'}, status: 'failed', error_message: 'Release phase failed'}]
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('P')
+  await key('\r')
+  await key('constellation-staging')
+  await key('\r')
+  assert.match(d.message, /constellation-production: Release phase failed/)
+  assert.equal(d.messageTone, 'error')
+  assert.equal(d.modal, null)
+  let signal
+  d.api.waitForPromotion = async (_promotion, _targets, options) => {
+    signal = options.signal
+    await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}))
+    signal.throwIfAborted()
+  }
+  await key('P')
+  await key('\r')
+  await key('constellation-staging')
+  await key('\r')
+  d.close()
+  await delay(20)
+  assert.equal(signal.aborted, true)
+  assert.equal(d.closed, true)
+  assert.equal(d.promotionRequest, null)
+})
+
 test('automatic refresh waits while the terminal is unfocused and catches up once on focus', async t => {
   t.mock.timers.enable({apis: ['setInterval']})
   const {dashboard: d, screen, key} = await harness(t, {refresh: 10})

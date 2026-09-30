@@ -177,6 +177,7 @@ export class Dashboard {
     this.copying = false
     this.commandRequest = null
     this.interactiveRequest = null
+    this.promotionRequest = null
     this.busy = false
     this.loading = new Map()
     this.loadingFrame = 0
@@ -284,6 +285,7 @@ export class Dashboard {
     key(['p'], () => this.setMode('pipelines'))
     key(['a'], () => this.setMode('apps'))
     key(['A', 'S-a'], () => void this.addApp())
+    key(['P', 'S-p'], () => void this.promoteApp())
     key(['/'], () => void this.filterNav())
     key(['R', 'S-r', 'g'], () => void this.reload())
     key(['[', 'left', 'h'], () => this.changeTab((this.tab + TABS.length - 1) % TABS.length))
@@ -402,10 +404,10 @@ export class Dashboard {
     }) : []
     this.tabs.setContent(this.app ? labels.join('  ') : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
     const appContext = Boolean(this.app)
-    const footerContext = appContext ? 'app' : this.pipeline ? 'pipeline' : 'workspace'
+    const footerContext = appContext ? this.pipeline ? 'pipeline-app' : 'app' : this.pipeline ? 'pipeline' : 'workspace'
     if (this.footerContext !== footerContext) {
       this.footerContext = footerContext
-      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console']] : this.pipeline ? [['A', 'add app']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
+      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console']] : this.pipeline ? [['A', 'add app']] : []), ...(this.pipeline ? [['P', 'promote']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
       this.footer.setContent(`${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${secondRow.map(([key, text]) => shortcut(key, text)).join('  ')}`)
     }
     this.drawStatus()
@@ -498,7 +500,7 @@ export class Dashboard {
       this.setRows(apps.length ? apps.map(app => ({kind: 'app', value: app, ...stageStyles[app.stage], emphasis: app.stage.toUpperCase(),
         label: `${app.stage.toUpperCase().padEnd(13)} ${single(app.name)}  ·  ${app.region?.name ?? '—'}`,
         columns: [app.stage.toUpperCase(), app.name, app.region?.name, app.stack?.name], columnLayout: 'Pipeline apps',
-        detail: `${single(app.name)}\n\nStage: ${app.stage}\nTeam: ${single(app.team?.name ?? 'Personal / shared')}\nRegion: ${single(app.region?.name)}\nStack: ${single(app.stack?.name)}\n\nEnter to view resources, add-ons, config, settings, releases, and metrics.`,
+        detail: `${single(app.name)}\n\nStage: ${app.stage}\nTeam: ${single(app.team?.name ?? 'Personal / shared')}\nRegion: ${single(app.region?.name)}\nStack: ${single(app.stack?.name)}\n\nEnter to view resources, add-ons, config, settings, releases, and metrics.\nP to promote the latest release to a higher stage.`,
       })) : [{icon: 'apps', tone: 'muted', label: 'This pipeline has no apps', detail: 'Press A to create an app in this pipeline, or a to browse accessible apps.'}])
       this.main.focus()
       this.message = `Pipeline loaded. Select an app and press Enter, or press A to add an app.${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
@@ -811,7 +813,8 @@ export class Dashboard {
       const previous = this.screen.focused
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: 14, ...frame(), label: ` ${icons[secret ? 'lock' : icon]}  ${single(title)} `, style: {...frame().style, border: {fg: palette[tone]}}})
       this.modal = modal
-      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false, style: {fg: palette.fg, bg: palette.bg}})
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false,
+        scrollable: true, mouse: true, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
       const input = blessed.textbox({parent: modal, top: 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', readline ? 'kill left' : 'clear')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
       if (readline) enableReadline(input, history ?? [], () => this.render())
@@ -947,6 +950,90 @@ export class Dashboard {
       }
       if (!this.closed) this.setStatus(errorMessage(error), 'error')
     } finally { modal.destroy(); this.modal = null; this.busy = false; finishCreation(); this.render() }
+  }
+
+  async promoteApp() {
+    if (!this.pipeline || this.busy) return
+    const selected = this.app ?? this.rows[this.main.selected]?.value
+    if (!selected?.id || (!this.app && this.rows[this.main.selected]?.kind !== 'app')) return
+    if (this.demo) { this.setStatus('App promotion is disabled in the offline demo.', 'warning'); return }
+    if (this.api.readOnly) { this.setStatus('Read-only mode: app promotion is disabled.', 'warning'); return }
+    const pipeline = this.pipeline
+    const generation = this.generation
+    const appContext = Boolean(this.app)
+    const current = () => !this.closed && this.generation === generation && this.pipeline?.id === pipeline.id
+      && (this.app?.id ?? this.rows[this.main.selected]?.value?.id) === selected.id
+    const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
+      content: `\n  ${badge('refresh', 'Loading promotion destinations…', 'info')}`})
+    this.modal = loading
+    this.busy = true
+    const finishLoading = this.beginLoading('promotion-options', 'Loading promotion destinations…')
+    let apps
+    try { apps = await this.api.pipelineApps(pipeline.id) }
+    catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    finally { loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    if (!current()) return
+    const source = apps.find(app => app.id === selected.id)
+    const sourceIndex = APP_STAGES.indexOf(source?.stage)
+    if (!source || sourceIndex < 0 || sourceIndex === APP_STAGES.length - 1) {
+      this.setStatus('This app has no higher stage available for promotion.', 'warning'); return
+    }
+    const stages = APP_STAGES.slice(sourceIndex + 1).filter(stage => apps.some(app => app.stage === stage))
+    if (!stages.length) { this.setStatus('There are no apps in a higher stage to promote to.', 'warning'); return }
+    const stage = await this.choose(`Promote · ${source.name}`, `Pipeline: ${pipeline.name}\nSource stage: ${source.stage}\nChoose a destination stage for the latest release.`,
+      stages.map(stage => ({label: `${stage} · ${apps.filter(app => app.stage === stage).map(app => app.name).join(', ')}`, value: stage})))
+    if (stage === null || !current()) return
+    const targets = apps.filter(app => app.stage === stage)
+    const confirmation = await this.confirm(source,
+      `Promote ${source.name}: ${source.stage} → ${stage}\nPipeline: ${pipeline.name}\nDestinations: ${targets.map(app => app.name).join(', ')}\nDeploys the latest release and restarts destination dynos.`, {highlightFirstLine: true})
+    if (!confirmation || !current()) return
+    const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '80%', height: '60%', ...frame(),
+      label: ` ${icons.pipelines}  Promoting ${single(source.name)} `, scrollable: true, keys: true, vi: true, mouse: true,
+      content: `\n  ${badge('refresh', `Starting promotion to ${stage}…`, 'info')}`, scrollbar: {ch: '│', style: {bg: palette.border}}})
+    bindMovementKeys(modal)
+    this.modal = modal
+    modal.focus()
+    this.busy = true
+    const controller = new AbortController()
+    this.promotionRequest = {controller}
+    const finishPromotion = this.beginLoading('promotion', `Promoting ${source.name} to ${stage}…`)
+    let promotion
+    try {
+      promotion = await this.api.promotePipelineApp({pipeline, source, stage, targets}, confirmation)
+      if (this.closed) return
+      const results = await this.api.waitForPromotion(promotion, targets, {signal: controller.signal, onUpdate: results => {
+        if (this.closed) return
+        modal.setContent(`\n  ${badge('pipelines', `${source.name} → ${stage}`, 'info')}\n\n${targets.map(app => {
+          const result = results.find(item => item.app.id === app.id)
+          return `  ${badge(result?.status === 'failed' ? 'error' : 'apps', `${app.name}: ${result?.status ?? 'pending'}${result?.error_message ? ` · ${result.error_message}` : ''}`, result?.status === 'failed' ? 'error' : result?.status === 'succeeded' ? 'success' : 'info')}`
+        }).join('\n')}`)
+        this.render()
+      }})
+      if (this.closed) return
+      this.busy = false
+      let refreshed
+      if (appContext) refreshed = await this.loadApp()
+      else {
+        await this.openPipeline(pipeline)
+        const index = this.rows.findIndex(row => row.value?.id === source.id)
+        if (index >= 0) this.main.select(index)
+        refreshed = index >= 0
+      }
+      const failures = results.filter(result => result.status === 'failed')
+      this.setStatus(failures.length
+        ? `Promotion failed for ${failures.map(result => `${targets.find(app => app.id === result.app.id)?.name ?? result.app.id}: ${result.error_message ?? 'failed'}`).join('; ')}`
+        : `Promoted ${source.name} to ${stage}: ${targets.map(app => app.name).join(', ')}.${refreshed ? '' : ' Refresh failed; press R to retry.'}`,
+      failures.length ? 'error' : refreshed ? 'success' : 'warning')
+    } catch (error) {
+      if (!this.closed) this.setStatus(`${promotion ? `Promotion ${promotion.id} started, but status tracking failed. ` : ''}${errorMessage(error)}`, 'error')
+    } finally {
+      modal.destroy()
+      this.modal = null
+      this.busy = false
+      this.promotionRequest = null
+      finishPromotion()
+      if (!this.closed) { this.main.focus(); this.render() }
+    }
   }
 
   confirmChoice(title, description, {highlightFirstLine = false} = {}) {
@@ -1253,7 +1340,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
@@ -1270,6 +1357,8 @@ export class Dashboard {
     this.commandRequest = null
     this.interactiveRequest?.controller.abort()
     this.interactiveRequest = null
+    this.promotionRequest?.controller.abort()
+    this.promotionRequest = null
     this.telemetry = null
     clearInterval(this.timer)
     this.loading.clear()

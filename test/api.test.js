@@ -28,6 +28,7 @@ test('read-only mode rejects every write before transport', async () => {
   await assert.rejects(api.setConfig('app', 'KEY', 'value', 'app'), /Read-only/)
   await assert.rejects(api.maintenance('app', true, 'app'), /Read-only/)
   await assert.rejects(api.createPipelineApp({name: 'new-app'}, 'new-app'), /Read-only/)
+  await assert.rejects(api.promotePipelineApp({source: {name: 'source-app'}}, 'source-app'), /Read-only/)
   for (const method of ['PATCH', 'POST', 'DELETE', 'PUT', 'patch']) await assert.rejects(api.request('/apps/app', {method}), /Read-only/)
   assert.equal(calls, 0)
 })
@@ -115,6 +116,64 @@ test('runtime regions exclude Private Spaces and creation reports a partial atta
     return true
   })
   assert.ok(!calls.some(call => call.method === 'DELETE'))
+})
+
+test('pipeline promotion validates stages and rechecks membership before deploying by ID', async () => {
+  const source = {id: 'source-id', name: 'source-app', stage: 'staging'}
+  const target = {id: 'target-id', name: 'target-app', stage: 'production'}
+  const pipeline = {id: 'pipeline-id'}
+  const options = {pipeline, source, stage: 'production', targets: [target]}
+  let couplings = [source, target].map(app => ({app: {id: app.id}, stage: app.stage}))
+  const calls = []
+  const api = new HerokuAPI({async request(path, options) {
+    calls.push({path, ...options})
+    return {body: options.method === 'GET' ? couplings : {id: 'promotion-id'}}
+  }})
+  await assert.rejects(api.promotePipelineApp(options, 'wrong-name'), /exact app name/)
+  await assert.rejects(api.promotePipelineApp({...options, stage: 'development'}, source.name), /higher pipeline stage/)
+  await assert.rejects(api.promotePipelineApp({...options, targets: [source]}, source.name), /downstream apps/)
+  await assert.rejects(api.promotePipelineApp({...options, targets: []}, source.name), /downstream apps/)
+  assert.equal(calls.length, 0)
+  assert.deepEqual(await api.promotePipelineApp(options, source.name), {id: 'promotion-id'})
+  assert.deepEqual(calls.map(({path, method, body}) => [method, path, body]), [
+    ['GET', '/pipelines/pipeline-id/pipeline-couplings', undefined],
+    ['POST', '/pipeline-promotions', {pipeline: {id: pipeline.id}, source: {app: {id: source.id}}, targets: [{app: {id: target.id}}]}],
+  ])
+  calls.length = 0
+  couplings = couplings.map(coupling => ({...coupling, stage: 'staging'}))
+  await assert.rejects(api.promotePipelineApp(options, source.name), /stages changed/)
+  assert.ok(calls.every(call => call.method === 'GET'))
+})
+
+test('promotion tracking waits for every destination and preserves per-app failure details', async () => {
+  const targets = [{id: 'first'}, {id: 'second'}]
+  let requests = 0
+  const api = new HerokuAPI({async request(path) {
+    assert.equal(path, '/pipeline-promotions/promotion-id/promotion-targets')
+    requests++
+    return {body: targets.map((app, index) => ({app, status: requests === 1 ? 'pending' : index ? 'failed' : 'succeeded',
+      ...(index && requests > 1 ? {error_message: 'Release command failed'} : {})}))}
+  }})
+  const updates = []
+  let waits = 0
+  const results = await api.waitForPromotion({id: 'promotion-id'}, targets, {
+    wait: async () => { waits++ }, onUpdate: results => updates.push(results),
+  })
+  assert.equal(waits, 1)
+  assert.equal(updates.length, 2)
+  assert.equal(results[1].error_message, 'Release command failed')
+})
+
+test('promotion tracking bounds polling and supports cancellation without repeating the write', async () => {
+  let requests = 0
+  const api = new HerokuAPI({async request() { requests++; return {body: []} }})
+  const targets = [{id: 'target'}]
+  await assert.rejects(api.waitForPromotion({id: 'promotion-id'}, targets, {attempts: 2, wait: async () => {}}), /promotion-id.*still pending/)
+  assert.equal(requests, 2)
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(api.waitForPromotion({id: 'promotion-id'}, targets, {signal: controller.signal}), {name: 'AbortError'})
+  assert.equal(requests, 2)
 })
 
 test('app sections fail independently and config is fetched lazily', async () => {

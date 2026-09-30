@@ -118,6 +118,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | --- | --- |
 | `t` / `p` / `a` | Browse teams / pipelines / apps |
 | `A` / `Shift-A` | Create a new app in the selected pipeline workspace |
+| `P` / `Shift-P` | Promote the selected pipeline app’s latest release to apps in a higher stage |
 | `j` / `k`, `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move selection down / up, or scroll the focused pane |
 | `Enter` | Open the selected item |
 | `Tab` / `Shift-Tab` | Focus the next / previous pane |
@@ -152,6 +153,8 @@ In prompts, `Enter` continues, `Esc` cancels, and `Ctrl-U` clears the input. Con
 ## Remote changes and config values
 
 In a pipeline workspace, press **`A`** to create an app. Choose development, staging, or production, enter a globally unique app name, and select a Common Runtime region fetched from Heroku. The summary shows the pipeline, stage, owner, and region and requires typing the new app’s exact name. Apps are created in the pipeline’s team (or your personal account for a personal pipeline), then added to that pipeline. The workspace refreshes and selects the new app. If pipeline attachment fails after creation, the app remains accessible and the status explains the failure. App creation is disabled in read-only and demo modes.
+
+Press **`P`** on a selected pipeline app or from an app view to promote its latest release. Choose a populated higher stage in the development → staging → production sequence, review the destination apps, and type the source app’s exact name to confirm. Promotion deploys to all apps in the chosen stage and restarts their dynos. Dash tracks each destination’s status and reports deployment failures. Promotion is disabled in read-only and demo modes.
 
 Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Pressing `x` on a process scales it to zero; use `s` to scale it back up. Individual dynos can be restarted but not stopped through the dashboard because Heroku automatically replaces stopped formation dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
 

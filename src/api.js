@@ -1,3 +1,5 @@
+import {setTimeout as delay} from 'node:timers/promises'
+
 const V3 = 'application/vnd.heroku+json; version=3'
 const encode = encodeURIComponent
 export const APP_STAGES = ['development', 'staging', 'production']
@@ -137,6 +139,37 @@ export class HerokuAPI {
       throw Object.assign(new Error(`App ${app.name} was created, but adding it to pipeline ${pipeline.name} failed: ${errorMessage(error)}`), {createdApp: app})
     }
     return {...app, stage}
+  }
+
+  async promotePipelineApp({pipeline, source, stage, targets}, confirmation) {
+    this.confirm(source?.name, confirmation)
+    const sourceIndex = APP_STAGES.indexOf(source.stage)
+    if (!pipeline?.id || !source.id) throw new Error('Select a pipeline app to promote.')
+    if (sourceIndex < 0 || APP_STAGES.indexOf(stage) <= sourceIndex) throw new Error('Choose a higher pipeline stage.')
+    if (!targets?.length || targets.some(app => !app.id || app.id === source.id)
+      || new Set(targets.map(app => app.id)).size !== targets.length) throw new Error('Select downstream apps to promote to.')
+    // Recheck membership before the write so a stage change during the dialog
+    // cannot deploy a release to a different stage than the one confirmed.
+    const couplings = await this.list(`/pipelines/${encode(pipeline.id)}/pipeline-couplings`)
+    if (!couplings.some(coupling => coupling.app.id === source.id && coupling.stage === source.stage)
+      || targets.some(app => !couplings.some(coupling => coupling.app.id === app.id && coupling.stage === stage))) {
+      throw new Error('Pipeline stages changed. Refresh the pipeline and confirm the promotion again.')
+    }
+    return this.get('/pipeline-promotions', {method: 'POST', body: {
+      pipeline: {id: pipeline.id}, source: {app: {id: source.id}}, targets: targets.map(app => ({app: {id: app.id}})),
+    }})
+  }
+
+  async waitForPromotion(promotion, targets, {signal, onUpdate = () => {}, wait = delay, attempts = 300} = {}) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      signal?.throwIfAborted()
+      const results = await this.list(`/pipeline-promotions/${encode(promotion.id)}/promotion-targets`)
+      signal?.throwIfAborted()
+      onUpdate(results)
+      if (targets.every(app => results.some(result => result.app.id === app.id && ['succeeded', 'failed'].includes(result.status)))) return results
+      await wait(1000, undefined, {signal})
+    }
+    throw new Error(`Promotion ${promotion.id} is still pending. Check its status in the Heroku dashboard.`)
   }
 
   async scale(app, type, quantity, size, confirmation) {
