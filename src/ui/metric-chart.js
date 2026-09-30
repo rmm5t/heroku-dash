@@ -86,12 +86,16 @@ function plotRows(model, tone, reference) {
 
 function timeAxis(model, width) {
   const labels = Array(width).fill(' ')
+  const dates = model.end - model.start >= 24 * 60 * 60_000
+  const length = dates && width >= 24 ? 11 : 5
   const at = (time, x) => {
-    for (const [index, char] of new Date(time).toISOString().slice(11, 16).split('').entries()) labels[x + index] = char
+    const date = new Date(time).toISOString()
+    const label = dates ? length === 11 ? date.slice(5, 16).replace('T', ' ') : date.slice(5, 10) : date.slice(11, 16)
+    for (const [index, char] of label.split('').entries()) labels[x + index] = char
   }
   at(model.start, 0)
-  if (width >= 24) at((model.start + model.end) / 2, Math.floor(width / 2) - 2)
-  at(model.end, width - 5)
+  if (width >= Math.max(24, length * 3 + 4)) at((model.start + model.end) / 2, Math.floor(width / 2) - Math.floor(length / 2))
+  at(model.end, width - length)
   return labels.join('')
 }
 
@@ -133,7 +137,7 @@ export function metricDetailContent(chart, {width = 80, height = 16} = {}) {
   const legend = [paint('◆ latest', 'fg'), paint('│ range', 'cyan'), paint('○/· gaps', 'muted'),
     ...(reference ? [paint(`┄ ${chart.reference.label}`, chart.reference.tone)] : [])].join('  ')
   const coverage = chart.metric.times.length ? chart.stats.count / chart.metric.times.length * 100 : 0
-  const caption = `${chart.metric.stepMinutes}m buckets · ${chart.stats.count}/${chart.metric.times.length} samples (${metricNumber(coverage)}%)`
+  const caption = `${chart.windowLabel ? `${chart.windowLabel} · ` : ''}${chart.metric.stepMinutes}m buckets · ${chart.stats.count}/${chart.metric.times.length} samples (${metricNumber(coverage)}%)`
   return [heading, ...summary, ...plot, legend, paint(caption, 'muted'), '',
     paint('SAMPLE DETAILS', 'accent', true), clean(chart.details), '',
     'Chart: filled columns are complete; ○ marks partial groups, · marks gaps.',

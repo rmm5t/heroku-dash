@@ -2,8 +2,20 @@ import {errorMessage, statusCode} from './api.js'
 
 export const METRICS_HOST = 'https://api.metrics.heroku.com'
 export const METRICS_WINDOW_MS = 2 * 60 * 60_000
+export const METRICS_TIMEFRAMES = [
+  {hours: 2, label: 'Past 2 hours', stepMinutes: 1},
+  {hours: 24, label: 'Past 24 hours', stepMinutes: 10},
+  {hours: 72, label: 'Past 72 hours', stepMinutes: 60},
+  {hours: 168, label: 'Past 7 days', stepMinutes: 120},
+]
 const MINUTE = 60_000
 const sample = value => Number.isFinite(value) && value >= 0 ? value : null
+
+export function metricsTimeframe(hours = 2) {
+  const timeframe = METRICS_TIMEFRAMES.find(timeframe => timeframe.hours === hours)
+  if (!timeframe) throw new Error('Choose a Metrics timeframe of 2, 24, or 72 hours, or 7 days.')
+  return timeframe
+}
 
 export function metricProcesses(data) {
   const running = new Set(data.dynos.map(dyno => dyno.type))
@@ -11,8 +23,8 @@ export function metricProcesses(data) {
     .map(({type, size}) => ({type, size})).sort((a, b) => a.type.localeCompare(b.type))
 }
 
-export function metricsScope(data) {
-  return JSON.stringify([data.app.id, data.app.generation?.name, metricProcesses(data)])
+export function metricsScope(data, windowHours = 2) {
+  return JSON.stringify([data.app.id, data.app.generation?.name, metricProcesses(data), windowHours])
 }
 
 export function normalizeMetric(body, window) {
@@ -39,11 +51,12 @@ export function normalizeMetric(body, window) {
   }
 }
 
-export async function fetchTelemetry(api, data, {now = Date.now(), signal} = {}) {
+export async function fetchTelemetry(api, data, {now = Date.now(), signal, windowHours = 2} = {}) {
   if (!data.app.id) throw new Error('An app ID is required to fetch performance metrics.')
+  const timeframe = metricsTimeframe(windowHours)
   const processes = metricProcesses(data)
   const result = {
-    appId: data.app.id, fetchedAt: new Date(now).toISOString(), windowHours: 2,
+    appId: data.app.id, fetchedAt: new Date(now).toISOString(), windowHours,
     router: {status: null, latency: null},
     processes: Object.fromEntries(processes.map(process => [process.type, {memory: null, load: null}])),
     errors: {},
@@ -58,8 +71,12 @@ export async function fetchTelemetry(api, data, {now = Date.now(), signal} = {})
       result.errors[key] = 'Dyno load averages apply to Cedar apps. Fir CPU usage is not supplied by this load endpoint.'
       return
     }
+    if (windowHours > 24 && ['Basic', 'Hobby'].includes(process?.size)) {
+      result.errors[key] = 'Basic/Hobby application metrics are limited to the past 24 hours.'
+      return
+    }
     jobs.push({key, route, process: process?.type ?? 'web', target, field,
-      step: ['Basic', 'Hobby'].includes(process?.size) ? 10 : 1})
+      step: Math.max(timeframe.stepMinutes, ['Basic', 'Hobby'].includes(process?.size) ? 10 : 1)})
   }
   const base = `/apps/${encodeURIComponent(data.app.id)}`
   const web = data.formation.find(process => process.type === 'web')
@@ -75,9 +92,9 @@ export async function fetchTelemetry(api, data, {now = Date.now(), signal} = {})
   let rateLimit = null
   const load = async (job, step) => {
     const end = Math.floor(now / (step * MINUTE)) * step * MINUTE
-    const window = {start: end - METRICS_WINDOW_MS, end}
+    const window = {start: end - windowHours * 60 * MINUTE, end}
     const query = new URLSearchParams({start_time: new Date(window.start).toISOString(), end_time: new Date(end).toISOString(),
-      step: `${step}m`, process_type: job.process})
+      step: step >= 60 ? `${step / 60}h` : `${step}m`, process_type: job.process})
     // process_type is required even on the formation routes. Names can return
     // empty data for existing apps, so routes always use the canonical app ID.
     const body = await api.get(`${METRICS_HOST}${job.route}?${query}`, {method: 'GET', retryAuth: false, timeout: 15_000, signal})

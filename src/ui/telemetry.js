@@ -1,4 +1,4 @@
-import {memoryUsage, metricProcesses, requestSeries, sparkline, summarizeSeries} from '../metrics.js'
+import {memoryUsage, metricProcesses, metricsTimeframe, requestSeries, sparkline, summarizeSeries} from '../metrics.js'
 import {clean, single} from './text.js'
 import {metricNumber as number, metricValue as format} from './metric-format.js'
 
@@ -6,6 +6,7 @@ const field = (name, value) => `${name.padEnd(18)} ${value}`
 
 export function telemetryRows(data, state = {}) {
   const snapshot = state.snapshot
+  const windowLabel = metricsTimeframe(snapshot?.windowHours ?? state.windowHours ?? 2).label
   const rows = []
   const add = ({id, title, scope, metric, values = [], unit = '', errorKey, note, reference, extra = () => []}) => {
     const stats = summarizeSeries(metric, values)
@@ -27,14 +28,14 @@ export function telemetryRows(data, state = {}) {
         field('Peak sample end', new Date(metric.times[peakIndex] + metric.stepMinutes * 60_000).toISOString()), '',
       ] : [snapshot ? 'No samples available for this metric in the requested window. This is not a zero reading.' : 'Loading performance metrics…', '']),
       ...extra(stats), '',
-      field('App', data.app.name), field('Source', 'api.metrics.heroku.com'),
+      field('App', data.app.name), field('Timeframe', windowLabel), field('Source', 'api.metrics.heroku.com'),
       ...(metric ? [field('Window start', metric.startTime), field('Window end', metric.endTime),
         field('Coverage', `${stats.count} / ${metric.times.length} complete buckets`)] : []),
       ...(snapshot ? [field('Fetched', snapshot.fetchedAt)] : []),
       '', note,
     ].join('\n')
     rows.push({id: `telemetry:${id}`, label: single(`${title} · ${scope} · ${format(stats.latest, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
-      metricChart: {title, scope, metric, values, unit, stats, reference, state: status ?? 'Recent', details: clean(facts)},
+      metricChart: {title, scope, metric, values, unit, stats, reference, windowLabel, state: status ?? 'Recent', details: clean(facts)},
       icon: title.startsWith('Latency') ? 'clock' : 'metrics', tone: status === 'Stale' ? 'warning' : error ? 'error' : status ? 'muted' : 'info',
       columns: [title, scope, format(stats.latest, unit, true), status ?? sparkline(values, 12)], emphasis: status,
     })

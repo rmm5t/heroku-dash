@@ -5,7 +5,7 @@ import packageJSON from '../../package.json' with {type: 'json'}
 import {APP_STAGES, errorMessage, normalizeHostname, validateAppName} from '../api.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
-import {fetchTelemetry, metricsScope} from '../metrics.js'
+import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
 import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
@@ -173,6 +173,7 @@ export class Dashboard {
     this.metricsRequest = null
     this.metricsSignature = null
     this.metricsRequestedAt = 0
+    this.metricsWindowHours = 2
     this.revealed = new Set()
     this.copying = false
     this.commandRequest = null
@@ -284,6 +285,7 @@ export class Dashboard {
       this.render()
     })
     key(['t'], () => this.setMode('teams'))
+    key(['T', 'S-t'], () => this.cycleMetricsTimeframe())
     key(['p'], () => this.setMode('pipelines'))
     key(['a'], () => this.setMode('apps'))
     key(['A', 'S-a'], () => void this.addApp())
@@ -558,7 +560,7 @@ export class Dashboard {
       this.resetResourceDetails()
       this.data = data
       this.app = data.app
-      if (this.metricsSignature && this.metricsSignature !== metricsScope(data)) this.resetMetrics()
+      if (this.metricsSignature && this.metricsSignature !== metricsScope(data, this.metricsWindowHours)) this.resetMetrics()
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
       this.messageTone = Object.keys(data.errors).length ? 'warning' : 'success'
       this.drawApp({preserveScroll: automatic && TABS[this.tab] === 'Metrics'})
@@ -583,11 +585,11 @@ export class Dashboard {
     const scroll = this.detail.childBase
     const {app, formation, errors} = this.data
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', `${this.data.addons.length} add-ons`, 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
-    this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]} `)
+    this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]}${TABS[this.tab] === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `)
     this.setRows(appRows(TABS[this.tab], this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
-      metrics: {snapshot: this.telemetry, error: this.metricsError},
+      metrics: {snapshot: this.telemetry, error: this.metricsError, windowHours: this.metricsWindowHours},
     }), true)
     if (preserveScroll) { this.detail.setScroll(scroll); this.render() }
   }
@@ -603,9 +605,18 @@ export class Dashboard {
     this.syncLoadingAnimation()
   }
 
+  cycleMetricsTimeframe() {
+    if (TABS[this.tab] !== 'Metrics' || !this.app || this.busy) return
+    const index = METRICS_TIMEFRAMES.findIndex(timeframe => timeframe.hours === this.metricsWindowHours)
+    this.metricsWindowHours = METRICS_TIMEFRAMES[(index + 1) % METRICS_TIMEFRAMES.length].hours
+    this.resetMetrics()
+    this.drawApp()
+    void this.loadMetrics({force: true})
+  }
+
   async loadMetrics({refresh = false, force = false} = {}) {
     if (TABS[this.tab] !== 'Metrics' || !this.data || this.closed) return
-    const signature = metricsScope(this.data)
+    const signature = metricsScope(this.data, this.metricsWindowHours)
     if (this.metricsRequest && !force) return
     if (!force && !refresh && this.metricsSignature === signature && Date.now() - this.metricsRequestedAt < 30_000) return
     this.metricsRequest?.controller.abort()
@@ -616,9 +627,9 @@ export class Dashboard {
     this.metricsRequestedAt = Date.now()
     this.metricsError = null
     const current = () => !this.closed && generation === this.generation && this.metricsRequest === request && !request.controller.signal.aborted
-    const finishLoading = this.beginLoading('metrics', 'Loading performance metrics…')
+    const finishLoading = this.beginLoading('metrics', `Loading performance metrics · ${metricsTimeframe(this.metricsWindowHours).label}…`)
     try {
-      const snapshot = await this.fetchMetrics(this.data, {signal: request.controller.signal})
+      const snapshot = await this.fetchMetrics(this.data, {signal: request.controller.signal, windowHours: this.metricsWindowHours})
       if (!current()) return
       this.telemetry = snapshot
     } catch (error) {
@@ -1465,7 +1476,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })

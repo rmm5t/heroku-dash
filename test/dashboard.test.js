@@ -1993,6 +1993,74 @@ test('telemetry loads lazily, preserves selected metric and scroll, caches tab s
   assert.ok(d.telemetry)
 })
 
+test('T cycles Metrics timeframes, preserves the selected metric, and ignores superseded responses', async t => {
+  const calls = []
+  const first = Promise.withResolvers()
+  const second = Promise.withResolvers()
+  const {dashboard: d, key} = await harness(t, {fetchMetrics: async (data, options) => {
+    calls.push({data, options})
+    if (calls.length === 1) return first.promise
+    if (calls.length === 2) return second.promise
+    return demoTelemetry(data, Date.now(), options.windowHours)
+  }})
+  await key('T')
+  assert.equal(calls.length, 0)
+  await key('\r')
+  await key('7')
+  assert.equal(calls[0].options.windowHours, 2)
+  assert.match(clean(d.main._label.content), /Past 2 hours/)
+  d.main.select(d.rows.findIndex(row => row.id === 'telemetry:memory:web'))
+  await key('T')
+  assert.equal(calls[0].options.signal.aborted, true)
+  assert.equal(calls[1].options.windowHours, 24)
+  assert.equal(d.telemetry, null)
+  assert.match(clean(d.main._label.content), /Past 24 hours/)
+  first.resolve(demoTelemetry(calls[0].data))
+  await delay(15)
+  assert.equal(d.telemetry, null)
+  assert.equal(d.metricsRequest.controller.signal, calls[1].options.signal)
+  await key('T')
+  assert.equal(calls[1].options.signal.aborted, true)
+  assert.equal(d.telemetry.windowHours, 72)
+  second.resolve(demoTelemetry(calls[1].data, Date.now(), 24))
+  await delay(15)
+  assert.equal(d.telemetry.windowHours, 72)
+  for (const [hours, label] of [[168, 'Past 7 days'], [2, 'Past 2 hours']]) {
+    await key('T')
+    assert.equal(d.telemetry.windowHours, hours)
+    assert.equal(d.metricsWindowHours, hours)
+    assert.match(clean(d.main._label.content), new RegExp(label))
+    assert.match(clean(d.detail.content), new RegExp(label))
+    assert.equal(d.rows[d.main.selected].id, 'telemetry:memory:web')
+  }
+  assert.equal(d.loadingTimer, null)
+})
+
+test('the selected Metrics range persists across tab/app changes and R refreshes that range', async t => {
+  const calls = []
+  const {dashboard: d, key} = await harness(t, {fetchMetrics: async (data, options) => {
+    calls.push({app: data.app.id, hours: options.windowHours})
+    return demoTelemetry(data, Date.now(), options.windowHours)
+  }})
+  await key('\r')
+  await key('7')
+  await key('T')
+  const snapshot = d.telemetry
+  await key('1')
+  await key('T')
+  assert.equal(d.metricsWindowHours, 24, 'Timeframe control is Metrics-only')
+  await key('7')
+  assert.equal(d.telemetry, snapshot)
+  assert.equal(calls.length, 2)
+  await key('R')
+  assert.equal(calls.at(-1).hours, 24)
+  assert.notEqual(d.telemetry, snapshot)
+  await d.openApp(d.catalog.apps[1])
+  assert.equal(d.metricsWindowHours, 24)
+  assert.equal(d.telemetry.windowHours, 24)
+  assert.deepEqual(calls.at(-1), {app: 'app-production', hours: 24})
+})
+
 test('old app telemetry is aborted and cannot replace the newly selected app', async t => {
   const pending = Promise.withResolvers()
   let firstData, firstSignal

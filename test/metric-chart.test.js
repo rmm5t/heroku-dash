@@ -3,7 +3,7 @@ import test from 'node:test'
 import blessed from 'blessed'
 import {chartModel, metricChartLines, metricDetailContent} from '../src/ui/metric-chart.js'
 import {metricNumber, metricValue} from '../src/ui/metric-format.js'
-import {summarizeSeries} from '../src/metrics.js'
+import {METRICS_TIMEFRAMES, summarizeSeries} from '../src/metrics.js'
 import {clean} from '../src/ui/text.js'
 
 function chart(values, options = {}) {
@@ -44,6 +44,27 @@ test('coarse buckets occupy their actual time ranges including a missing window 
   const model = chartModel(input, 6, 5)
   assert.deepEqual(model.bins.map(bin => bin.mean), [null, null, 10, 10, 20, 20])
   assert.equal(model.latest.x, 5)
+})
+
+test('long timeframe charts show distinguishable UTC dates and keep axes within narrow layouts', () => {
+  for (const timeframe of METRICS_TIMEFRAMES.slice(1)) {
+    const values = Array.from({length: timeframe.hours * 60 / timeframe.stepMinutes}, (_, index) => index + 1)
+    const input = chart(values, {windowLabel: timeframe.label})
+    const start = Date.parse(input.metric.startTime)
+    input.metric = {...input.metric, stepMinutes: timeframe.stepMinutes,
+      endTime: new Date(start + timeframe.hours * 60 * 60_000).toISOString(),
+      times: values.map((_, index) => start + index * timeframe.stepMinutes * 60_000)}
+    input.stats = summarizeSeries(input.metric, values)
+    for (const width of [30, 52, 90]) {
+      const lines = metricChartLines(input, {width})
+      const axis = clean(lines.at(-1))
+      assert.match(axis, /UTC/)
+      assert.ok(axis.includes(input.metric.startTime.slice(5, 10)))
+      assert.ok(axis.includes(input.metric.endTime.slice(5, 10)))
+      assert.ok(blessed.unicode.strWidth(axis) <= width)
+    }
+    assert.match(clean(metricDetailContent(input)), new RegExp(timeframe.label))
+  }
 })
 
 test('memory axes use MiB, include changing quotas, and identify an over-quota latest value', () => {

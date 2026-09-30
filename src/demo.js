@@ -1,15 +1,17 @@
 import {HerokuAPI} from './api.js'
-import {metricProcesses, normalizeMetric, METRICS_WINDOW_MS} from './metrics.js'
+import {metricProcesses, metricsTimeframe, normalizeMetric} from './metrics.js'
 
-export function demoTelemetry(data, now = Date.now()) {
-  const end = Math.floor(now / 60_000) * 60_000
-  const start = end - METRICS_WINDOW_MS
-  const wave = (base, amplitude) => Array.from({length: 120}, (_, i) => i === 60 ? null : base + Math.sin(i / 8) * amplitude)
-  const metric = series => normalizeMetric({start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(), step: 1, data: series}, {start, end})
+export function demoTelemetry(data, now = Date.now(), windowHours = 2) {
+  const step = metricsTimeframe(windowHours).stepMinutes
+  const end = Math.floor(now / (step * 60_000)) * step * 60_000
+  const start = end - windowHours * 60 * 60_000
+  const length = windowHours * 60 / step
+  const wave = (base, amplitude) => Array.from({length}, (_, i) => i === Math.floor(length / 2) ? null : base + Math.sin(i / 8) * amplitude)
+  const metric = series => normalizeMetric({start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(), step, data: series}, {start, end})
   return {
-    appId: data.app.id, fetchedAt: new Date(now).toISOString(), windowHours: 2, errors: {},
+    appId: data.app.id, fetchedAt: new Date(now).toISOString(), windowHours, errors: {},
     router: {
-      status: metric({'200': wave(120, 40).map(value => value === null ? null : Math.round(value)), '500': wave(1, 1).map(value => value === null ? null : Math.round(value))}),
+      status: metric({'200': wave(120, 40).map(value => value === null ? null : Math.round(value * step)), '500': wave(1, 1).map(value => value === null ? null : Math.round(value * step))}),
       latency: metric(Object.fromEntries([['p50', 80], ['p95', 180], ['p99', 300], ['max', 500]].map(([key, value]) => [`latency.ms.${key}`, wave(value, value / 4)]))),
     },
     processes: Object.fromEntries(metricProcesses(data).map(process => [process.type, {
@@ -52,5 +54,5 @@ export function createDemo() {
   api.pipelineApps = async () => structuredClone(apps)
   api.appData = async id => data(apps.find(a => a.id === id || a.name === id))
   api.config = async () => ({NODE_ENV: 'production', EXAMPLE_SECRET: 'demo-only-value', WEB_CONCURRENCY: '2'})
-  return {api, catalog, fetchMetrics: async data => demoTelemetry(data), resources: {available: false, message: 'Cost and limit lookup is disabled in the offline demo.'}, context: {pipeline, reason: 'Offline demo'}}
+  return {api, catalog, fetchMetrics: async (data, options = {}) => demoTelemetry(data, options.now ?? Date.now(), options.windowHours ?? 2), resources: {available: false, message: 'Cost and limit lookup is disabled in the offline demo.'}, context: {pipeline, reason: 'Offline demo'}}
 }

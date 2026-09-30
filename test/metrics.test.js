@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {HerokuAPI} from '../src/api.js'
-import {fetchTelemetry, memoryUsage, metricProcesses, normalizeMetric, requestSeries, sparkline, summarizeSeries} from '../src/metrics.js'
+import {fetchTelemetry, memoryUsage, metricProcesses, metricsScope, METRICS_TIMEFRAMES, normalizeMetric, requestSeries, sparkline, summarizeSeries} from '../src/metrics.js'
 
 const start = Date.parse('2026-09-26T10:00:00Z')
 const window = {start, end: start + 30 * 60_000}
@@ -11,7 +11,7 @@ const appData = () => ({app: {id: 'canonical-id', name: 'app-name', generation: 
   dynos: [{type: 'web'}, {type: 'worker'}, {type: 'run'}],
 })
 const reply = url => ({start_time: url.searchParams.get('start_time'), end_time: url.searchParams.get('end_time'),
-  step: Number.parseInt(url.searchParams.get('step')), data: {'200': [1, 2, 3]},
+  step: Number.parseInt(url.searchParams.get('step')) * (url.searchParams.get('step').endsWith('h') ? 60 : 1), data: {'200': [1, 2, 3]},
 })
 
 test('normalization uses minute steps, excludes incomplete buckets, and preserves missing samples', () => {
@@ -81,6 +81,43 @@ test('telemetry uses canonical IDs, GET-only access, process_type, and tier-awar
   assert.equal(result.router.status.stepMinutes, 1)
   assert.deepEqual(metricProcesses(data).map(p => p.type), ['web', 'worker'])
   assert.equal(result.processes.release, undefined)
+})
+
+for (const timeframe of METRICS_TIMEFRAMES) test(`${timeframe.label} requests the full range at Heroku's documented resolution`, async () => {
+  const data = appData()
+  data.formation = [{type: 'web', quantity: 1, size: 'Standard-1X'}]
+  const now = Date.parse('2026-09-30T12:34:45Z')
+  const expectedEnd = Math.floor(now / (timeframe.stepMinutes * 60_000)) * timeframe.stepMinutes * 60_000
+  const count = timeframe.hours * 60 / timeframe.stepMinutes
+  const result = await fetchTelemetry({async get(path) {
+    const url = new URL(path)
+    assert.equal(Date.parse(url.searchParams.get('end_time')), expectedEnd)
+    assert.equal(Date.parse(url.searchParams.get('start_time')), expectedEnd - timeframe.hours * 60 * 60_000)
+    assert.equal(url.searchParams.get('step'), timeframe.stepMinutes >= 60 ? `${timeframe.stepMinutes / 60}h` : `${timeframe.stepMinutes}m`)
+    return {...reply(url), data: {'200': Array.from({length: count + 1}, (_, index) => index)}}
+  }}, data, {now, windowHours: timeframe.hours})
+  assert.equal(result.windowHours, timeframe.hours)
+  assert.equal(result.router.status.stepMinutes, timeframe.stepMinutes)
+  assert.equal(result.router.status.times.length, count)
+  assert.equal(result.router.status.times.at(-1), expectedEnd - timeframe.stepMinutes * 60_000)
+  assert.equal(result.router.status.series['200'].at(-1), count - 1)
+  assert.deepEqual(result.errors, {})
+})
+
+test('longer windows respect Basic retention and cache scopes include the timeframe', async () => {
+  const data = appData()
+  const paths = []
+  const api = {async get(path) { paths.push(path); return reply(new URL(path)) }}
+  const day = await fetchTelemetry(api, data, {windowHours: 24})
+  assert.equal(day.processes.worker.memory.stepMinutes, 10)
+  paths.length = 0
+  const week = await fetchTelemetry(api, data, {windowHours: 168})
+  assert.ok(paths.every(path => !path.includes('/formation/worker/')))
+  assert.match(week.errors['worker.memory'], /24 hours/)
+  assert.equal(week.processes.worker.memory, null)
+  assert.equal(week.processes.web.memory.stepMinutes, 120)
+  assert.notEqual(metricsScope(data, 2), metricsScope(data, 24))
+  await assert.rejects(fetchTelemetry({get() { assert.fail('Invalid timeframe reached transport') }}, data, {windowHours: 12}), /Metrics timeframe/)
 })
 
 test('unsupported resolution falls back once and failures are isolated by metric', async () => {

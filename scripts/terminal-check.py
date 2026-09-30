@@ -66,6 +66,11 @@ try:
         wait_for('rpm')
         send(b'jjjj')  # Select the first process's Memory row.
         wait_for('MiB')
+        if not args.repo:
+            for timeframe in ('Past 24 hours', 'Past 72 hours', 'Past 7 days', 'Past 2 hours'):
+                send(b'T')
+                wait_for(timeframe)
+                wait_for('MiB')
     send(b'?')
     wait_for('Keyboard shortcuts')
     send(b'?')
@@ -90,7 +95,7 @@ try:
             except OSError:
                 break
     assert process.wait(timeout=1) == 0
-    print(f'PASS: {"live read-only" if args.repo else "offline demo"} TTY startup, app navigation, metrics, help, write blocking, {"numeric telemetry, " if args.metrics else ""}{"companion cost details, " if args.resources else ""}and clean exit')
+    print(f'PASS: {"live read-only" if args.repo else "offline demo"} TTY startup, app navigation, metrics, help, write blocking, {"numeric telemetry, " if args.metrics else ""}{"timeframe cycling, " if args.metrics and not args.repo else ""}{"companion cost details, " if args.resources else ""}and clean exit')
 finally:
     if process.poll() is None:
         process.terminate()

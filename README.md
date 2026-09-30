@@ -110,7 +110,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, including status, author, description, and timestamp |
-| **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and two-hour sparklines, alongside dyno health and recent deployment outcomes |
+| **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and selectable-timeframe charts, alongside dyno health and recent deployment outcomes |
 
 ### Keyboard shortcuts
 
@@ -146,6 +146,7 @@ App actions:
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
 | `x` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
+| `T` / `Shift-T` | Metrics | Cycle Past 2 hours (default), Past 24 hours, Past 72 hours, and Past 7 days |
 | `D` | Settings | Add a custom domain and optionally enable SSL with ACM |
 | `y` | Settings | Copy the selected custom domain’s CNAME to the clipboard |
 | `x` | Settings | Remove the selected custom domain |
@@ -210,11 +211,11 @@ The **Metrics (`7`)** view reads Heroku's separate **`api.metrics.heroku.com`** 
 | Memory | Mean RSS + swap usage in MiB (or reported mean used memory when that series is unavailable); Details includes matching-bucket quota, usage percentage, RSS/swap maxima, and total maximum |
 | Dyno load | Mean one-minute load average per process type, with the bucket maximum in Details; this is runnable CPU work, **not CPU utilization percent** |
 
-Rows include a compact sparkline. Select a row for a **colored, multi-line chart** in Details, with a value axis, UTC time labels, and latest/mean/min/max summaries. The Metrics layout gives Details extra vertical space, and charts resize with the terminal. The window is **two hours**, normally at **one-minute resolution**; Basic/Hobby dynos use ten-minute buckets, with a coarser-resolution retry when required by Heroku. Memory/load are fetched for active formation types and configured `web` processes, rather than for ephemeral one-off dynos.
+Rows include a compact sparkline. Select a row for a **colored, multi-line chart** in Details, with a value axis, UTC time labels, and latest/mean/min/max summaries. The Metrics layout gives Details extra vertical space, and charts resize with the terminal. Press **`T`** (`Shift-T`) in Metrics to cycle **Past 2 hours** (default), **Past 24 hours**, **Past 72 hours**, and **Past 7 days**. These use Heroku’s one-minute, ten-minute, one-hour, and two-hour resolutions respectively. Multi-day charts include dates on the UTC time axis. Basic/Hobby dynos use ten-minute buckets and have a 24-hour history limit; longer ranges show unavailable metrics for those dynos. Memory/load are fetched for active formation types and configured `web` processes, rather than for ephemeral one-off dynos.
 
 Memory charts include the reported quota guide; p95/p99 latency charts compare against p50/p95 respectively; dyno-load charts include the bucket maximum. Details also includes sample and peak timestamps, resolution, coverage, and metric-specific breakdowns. Focus Details with `Tab` and use `j`/`k` to scroll the full report.
 
-Metrics load on opening the tab and refresh with the current app while the tab is active. Reopening the tab within 30 seconds reuses its snapshot; **`R`** forces a fresh request. Up to four requests run concurrently, and pending telemetry is canceled when changing apps or quitting. The offline demo supplies synthetic time series without network requests.
+Metrics load on opening the tab and refresh with the current app while the tab is active. Reopening the tab within 30 seconds reuses its snapshot; **`R`** forces a fresh request. Changing the timeframe immediately fetches the new range and cancels any previous-range request. The selected timeframe is retained when switching apps during the session. Up to four requests run concurrently, and pending telemetry is canceled when changing apps or quitting. The offline demo supplies synthetic time series for each timeframe without network requests.
 
 ### Reading the charts
 
@@ -325,7 +326,7 @@ Without `--repo`, this uses the offline demo. Live terminal checks always pass `
 
 `--resources` also checks Resources/Add-ons cost details in the actual terminal UI; use a pipeline whose first app has dynos and add-ons, with `heroku-resources` installed.
 
-`--metrics` also verifies numeric throughput and memory in the terminal UI. Use a pipeline whose first app has recent metrics, or run it without `--repo` to check the synthetic demo.
+`--metrics` also verifies numeric throughput and memory in the terminal UI. Use a pipeline whose first app has recent metrics, or run it without `--repo` to check the synthetic demo and cycle through all four Metrics timeframes.
 
 ### Layout
 
