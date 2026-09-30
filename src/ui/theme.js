@@ -46,6 +46,45 @@ export const stageStyles = {
   production: {icon: 'releases', tone: 'success'},
 }
 
+const KEY = '(?:Ctrl-[A-Z]|Alt-[A-Z]|Shift-Tab|Enter|Esc|Tab|1–7|[a-zA-Z?:/←→↑↓\\[\\]])'
+const KEYS = `${KEY}(?:\\s*(?:/|,|or)\\s*${KEY})*`
+const keyPatterns = [
+  new RegExp(`\\[(${KEYS})\\]`, 'g'),
+  /\(([yn])\)/g,
+  /\b((?:Ctrl|Alt)-[A-Z]|Shift-Tab|Enter|Esc|Tab)\b/g,
+  new RegExp(`\\b(?:[Pp]ress|[Uu]se|with|or|also)\\s+(${KEYS})(?=$|[\\s.,;)])`, 'g'),
+  new RegExp(`^ {2}(${KEYS})(?=\\s)`, 'gm'),
+  new RegExp(`^(${KEYS})(?= (?:to |cycles |filters |displays ))`, 'gm'),
+  /^(j\/k)(?=,)/gm,
+]
+
+function keybindingRanges(value) {
+  const text = clean(value)
+  const matches = keyPatterns.flatMap(pattern => [...text.matchAll(pattern)].map(match => {
+    const start = match.index + match[0].lastIndexOf(match[1])
+    return {start, end: start + match[1].length}
+  })).sort((a, b) => a.start - b.start || a.end - b.end)
+  const ranges = []
+  for (const range of matches) {
+    const previous = ranges.at(-1)
+    if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end)
+    else ranges.push(range)
+  }
+  return ranges
+}
+
+export function highlightKeys(value, tone, bold = false) {
+  const text = clean(value)
+  const surrounding = value => tone === undefined ? value : paint(value, tone, bold)
+  let content = ''
+  let offset = 0
+  for (const {start, end} of keybindingRanges(text)) {
+    content += surrounding(text.slice(offset, start)) + paint(text.slice(start, end), 'accent', true)
+    offset = end
+  }
+  return content + surrounding(text.slice(offset))
+}
+
 export function styleListSelection(list) {
   const focused = () => list.screen.focused === list
   Object.assign(list.style.selected, {
@@ -57,12 +96,33 @@ export function styleListSelection(list) {
   const marker = blessed.box({parent: list, top: 0, left: 0, width: 1, height: 1,
     fixed: true, autoFocus: false, tags: false, hidden: true, content: '▎',
     style: {fg: palette.selectionMarker, bg: palette.selected}})
+  const shortcuts = []
   list.on('prerender', () => {
     const top = list.selected - list.childBase
-    if (!focused() || !list.items[list.selected] || top < 0 || top >= list.height - list.iheight) { marker.hide(); return }
-    marker.top = top
-    marker.show()
-    marker.setFront()
+    const item = list.items[list.selected]
+    const visible = item && top >= 0 && top < list.height - list.iheight
+    marker.hide()
+    for (const overlay of shortcuts) overlay.hide()
+    if (!visible) return
+    if (focused()) {
+      marker.top = top
+      marker.show()
+      marker.setFront()
+    }
+    const text = clean(item.content)
+    const ranges = keybindingRanges(text).filter(({start, end}) => item.content.includes(paint(text.slice(start, end), 'accent', true)))
+    for (const [index, {start, end}] of ranges.entries()) {
+      const key = text.slice(start, end)
+      const left = blessed.unicode.strWidth(text.slice(0, start))
+      const width = blessed.unicode.strWidth(key)
+      if (left + width > list.width - list.iwidth - (list.scrollbar ? 1 : 0)) continue
+      const overlay = shortcuts[index] ??= blessed.box({parent: list, height: 1, fixed: true, autoFocus: false, tags: false,
+        style: {fg: palette.accent, bold: true, bg: () => focused() ? palette.selected : palette.selectedInactive}})
+      Object.assign(overlay, {top, left, width})
+      overlay.setContent(key)
+      overlay.show()
+      overlay.setFront()
+    }
   })
 }
 
@@ -74,7 +134,7 @@ export function paint(value, tone = 'fg', bold = false) {
 }
 
 export function badge(icon, value, tone = 'accent') {
-  return `${paint(icons[icon] ?? icons.overview, tone)} ${paint(single(value), tone)}`
+  return `${paint(icons[icon] ?? icons.overview, tone)} ${highlightKeys(single(value), tone)}`
 }
 
 export const SCANNER_INTERVAL = 40
@@ -118,7 +178,13 @@ export function rowLabel(row, width = 90) {
     || (offset + emphasis.length < text.length && !/\s/.test(text[offset + emphasis.length])))) {
     offset = text.indexOf(emphasis, offset + 1)
   }
-  let label = offset < 0 ? text : `${text.slice(0, offset)}${paint(emphasis, row.tone)}${text.slice(offset + emphasis.length)}`
+  // Config labels contain literal values rather than shortcut hints.
+  const highlight = row.kind === 'config' ? value => value : highlightKeys
+  let label = highlight(text)
+  if (offset >= 0) {
+    const emphasized = row.kind === 'config' ? paint(emphasis, row.tone) : highlightKeys(emphasis, row.tone ?? 'fg')
+    label = `${highlight(text.slice(0, offset))}${emphasized}${highlight(text.slice(offset + emphasis.length))}`
+  }
   if (nested) {
     label = label.replace(icon, paint(icon, row.tone ?? 'accent'))
     return ` ${paint(row.treeBranch, 'muted')} ${label}`

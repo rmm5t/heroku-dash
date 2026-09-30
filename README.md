@@ -96,7 +96,7 @@ Resources groups dynos directly beneath their process type, with indented names 
 
 The heading shows the resource hierarchy: **team › pipeline › app**, including when you open an app or pipeline directly. Personal resources use **Personal**, and apps without a pipeline use **No pipeline**. Opening a resource resolves its parents without changing the sidebar's team filter.
 
-Nerd Font icons identify teams, pipelines, apps, process types, databases, and the app views. **Green** indicates healthy/successful states, **amber** indicates pending states or maintenance, **red** indicates failures, and **gray** indicates inactive or unknown states. Config rows use a lock for masked values and an amber eye for revealed values. Status text remains visible alongside icons and colors.
+Nerd Font icons identify teams, pipelines, apps, process types, databases, and the app views. **Green** indicates healthy/successful states, **amber** indicates pending states or maintenance, **red** indicates failures, and **gray** indicates inactive or unknown states. Keyboard shortcuts are highlighted in **purple** throughout the UI, including inline hints, selected rows, dialogs, and help. Config rows use a lock for masked values and an amber eye for revealed values. Status text remains visible alongside icons and colors.
 
 Pipeline stages are color-coded: **blue** development, **purple** review, **amber** staging, and **green** production. The active view and focused pane use Heroku purple. Focused selections use a slim purple marker, with soft-white text on charcoal in dark mode or dark text on light gray in light mode. Unfocused selections are dimmed. On narrower terminals, inactive tabs show their number and icon; the active tab keeps its name.
 

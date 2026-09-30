@@ -1,6 +1,6 @@
 import blessed from 'blessed'
 import {clean} from './text.js'
-import {paint} from './theme.js'
+import {highlightKeys, paint} from './theme.js'
 import {metricDetailContent} from './metric-chart.js'
 
 export function detailContent(row, dimensions) {
@@ -10,10 +10,10 @@ export function detailContent(row, dimensions) {
   let content = ''
   let offset = 0
   for (const {start, end} of ranges) {
-    content += `${text.slice(offset, start)}${paint(text.slice(start, end), 'cyan')}`
+    content += `${highlightKeys(text.slice(offset, start))}${paint(text.slice(start, end), 'cyan')}`
     offset = end
   }
-  return content + text.slice(offset)
+  return content + highlightKeys(text.slice(offset))
 }
 
 export function domainValueAt(detail, row, mouse) {

@@ -594,6 +594,81 @@ for (const theme of ['dark', 'light']) test(`${theme} selection highlights follo
   assertSelections(d.main)
 })
 
+for (const theme of ['dark', 'light']) test(`${theme} inline keybindings stay purple across panes, selections, and help`, async t => {
+  const {dashboard: d, screen, key} = await harness(t, {theme})
+  const assertKey = (widget, context, key, tone = 'accent') => {
+    const {xi, xl, yi, yl} = widget.lpos
+    for (let y = Math.max(0, yi); y < Math.min(yl, screen.height); y++) {
+      const cells = screen.lines[y].slice(xi, xl)
+      const text = cells.map(cell => cell[1]).join('')
+      const start = text.indexOf(context)
+      if (start < 0) continue
+      const offset = start + context.indexOf(key)
+      for (let index = 0; index < key.length; index++) {
+        assert.equal((cells[offset + index][0] >> 9) & 0x1ff, blessed.colors.convert(palette[tone]), `${context}: ${key}`)
+      }
+      return cells[offset][0]
+    }
+    assert.fail(`Expected visible shortcut: ${context}`)
+  }
+  assertKey(d.status, 'press Enter', 'Enter')
+  assertKey(d.status, 'press A', 'A')
+  assertKey(d.detail, 'P to promote', 'P')
+  await key('\r')
+  for (let index = 0; index < TABS.length; index++) {
+    const [x, y] = tabCell(d, screen, index)
+    assert.equal((screen.lines[y][x][0] >> 9) & 0x1ff, blessed.colors.convert(palette.accent))
+  }
+  await key('2')
+  d.main.select(d.rows.findIndex(row => row.kind === 'formation'))
+  d.render()
+  const selected = d.main.items[d.main.selected]
+  assert.equal(assertKey(selected, '[s/x/r]', 's/x/r') & 0x1ff, blessed.colors.convert(palette.selected))
+  for (const key of ['s', 'x', 'r']) assertKey(d.detail, `[${key}]`, key)
+  await key('\t')
+  assert.equal(assertKey(selected, '[s/x/r]', 's/x/r') & 0x1ff, blessed.colors.convert(palette.selectedInactive))
+  const dyno = d.main.items[d.rows.findIndex(row => row.kind === 'dyno')]
+  assertKey(dyno, '[r]', 'r')
+  await key('3')
+  assertKey(d.detail, '[o]', 'o')
+  await key('4')
+  for (const key of ['y', 'v', 'e', 'n', 'x']) assertKey(d.detail, `[${key}]`, key)
+  await key('5')
+  assertKey(d.detail, 'Press m', 'm')
+  assertKey(d.main.items[0], '[m] toggle', 'm')
+  await key('7')
+  assertKey(d.main._label, '[T] timeframe', 'T')
+  d.api.readOnly = false
+  await key(':')
+  await key('logs')
+  await key('\r')
+  const proceed = d.modal.children.find(child => clean(child.content) === 'Continue (y)')
+  const cancel = d.modal.children.find(child => clean(child.content) === 'Cancel (n)')
+  assertKey(proceed, 'Continue (y)', 'y')
+  assertKey(cancel, '(n)', 'n')
+  await key('\x1b')
+  await key('?')
+  for (const keys of ['t / p / a', 'j / k, ↑ / ↓', 'Ctrl-N / Ctrl-P', 'Tab / Shift-Tab', '1–7', 'h / l, [ / ]', 'R / g']) {
+    assertKey(d.modal, keys, keys)
+  }
+  d.modal.setScroll(15)
+  d.render()
+  assertKey(d.modal, 'Y (Config)', 'Y')
+  assertKey(d.modal, 'T (Metrics)', 'T')
+  d.modal.setScrollPerc(100)
+  d.render()
+  for (const key of ['Esc', '?', 'q']) assertKey(d.modal, 'Press Esc, ?, or q', key)
+  await key('q')
+  d.clearApp()
+  d.pipeline = null
+  d.drawLanding()
+  d.render()
+  assertKey(d.summary, 't / p / a', 't / p / a')
+  assertKey(d.detail, 'j/k', 'j/k')
+  assertKey(d.detail, '/ filters', '/')
+  assertKey(d.detail, '? displays', '?')
+})
+
 test('light theme covers app views, config values, charts, and input prompts', async t => {
   const {dashboard: d, screen, key} = await harness(t, {theme: 'light'})
   assert.equal(d.theme, 'light')
@@ -1400,8 +1475,8 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   await key('\r')
   const invocation = 'heroku logs --num 10 --app constellation-staging'
   assert.match(d.modal.children.map(child => child.content).join('\n'), new RegExp(invocation))
-  assert.match(d.modal.children.map(child => child.content).join('\n'), /Continue \(y\)/)
-  assert.match(d.modal.children.map(child => child.content).join('\n'), /Cancel \(n\)/)
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Continue \(y\)/)
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Cancel \(n\)/)
   const confirmation = screen.lines.map(line => line.map(cell => cell[1]).join(''))
   const confirmationY = confirmation.findIndex(line => line.includes(invocation))
   const confirmationX = confirmation[confirmationY].indexOf(invocation)
@@ -1515,7 +1590,7 @@ test('app-confirm commands inject the current app and require one exact-name con
   const invocation = 'heroku pg:upgrade:run DATABASE_URL --confirm constellation-staging --app constellation-staging'
   assert.match(d.modal.children.map(child => child.content).join('\n'), new RegExp(invocation))
   assert.match(d.modal._label.content, /Confirm remote change/)
-  assert.ok(!d.modal.children.some(child => child.content === 'Continue (y)'))
+  assert.ok(!d.modal.children.some(child => clean(child.content) === 'Continue (y)'))
   const confirmation = screen.lines.map(line => line.map(cell => cell[1]).join(''))
   const confirmationY = confirmation.findIndex(line => line.includes(invocation))
   const confirmationX = confirmation[confirmationY].indexOf(invocation)
@@ -1593,8 +1668,8 @@ test('custom commands support cancellation, button selection, and reject retarge
   await key(':')
   await key('logs')
   await key('\r')
-  const proceed = d.modal.children.find(child => child.content === 'Continue (y)')
-  const cancel = d.modal.children.find(child => child.content === 'Cancel (n)')
+  const proceed = d.modal.children.find(child => clean(child.content) === 'Continue (y)')
+  const cancel = d.modal.children.find(child => clean(child.content) === 'Cancel (n)')
   assert.equal((screen.lines[proceed.lpos.yi][proceed.lpos.xi][0] >> 9) & 0x1ff, blessed.colors.convert(palette.success))
   await key('\x1b[C')
   assert.equal((screen.lines[cancel.lpos.yi][cancel.lpos.xi][0] >> 9) & 0x1ff, blessed.colors.convert(palette.success))
@@ -1613,7 +1688,7 @@ test('custom commands support cancellation, button selection, and reject retarge
   await key(':')
   await key('logs')
   await key('\r')
-  const clickCancel = d.modal.children.find(child => child.content === 'Cancel (n)')
+  const clickCancel = d.modal.children.find(child => clean(child.content) === 'Cancel (n)')
   await click(Math.floor((clickCancel.lpos.xi + clickCancel.lpos.xl) / 2), Math.floor((clickCancel.lpos.yi + clickCancel.lpos.yl) / 2))
   assert.equal(d.modal, null)
   assert.equal(calls, 1)

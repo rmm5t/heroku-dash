@@ -9,7 +9,7 @@ import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from
 import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
-import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
+import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 
 const SIDEBAR_WIDTH = '22%'
@@ -20,8 +20,8 @@ const descriptionContent = (description, highlightFirstLine) => {
   const text = clean(description)
   const newline = text.indexOf('\n')
   return highlightFirstLine
-    ? `${paint(newline < 0 ? text : text.slice(0, newline), 'warning', true)}${newline < 0 ? '' : text.slice(newline)}`
-    : text
+    ? `${highlightKeys(newline < 0 ? text : text.slice(0, newline), 'warning', true)}${newline < 0 ? '' : highlightKeys(text.slice(newline))}`
+    : highlightKeys(text)
 }
 
 function bindMovementKeys(widget) {
@@ -219,7 +219,7 @@ export class Dashboard {
       scrollbar: {ch: '│', style: {bg: palette.border}}})
     this.status = blessed.box({parent, bottom: 2, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.muted, bg: palette.bg}})
     this.footer = blessed.box({parent, bottom: 0, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
-    this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: 'heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit'})
+    this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: highlightKeys('heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit')})
     this.screen.on('resize', () => this.render())
     this.screen.on('blur', () => { this.terminalFocused = false })
     this.screen.on('focus', () => {
@@ -402,7 +402,9 @@ export class Dashboard {
     const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
       .filter(([, name]) => name).map(([icon, name]) => badge(icon, name, 'fg')).join(`  ${paint(icons.chevron, 'muted')}  `)
     this.header.setContent(`${paint(`${icons.heroku}  HEROKU DASH`, 'accent', true)}   ${this.demo ? `${badge('staging', 'DEMO', 'info')}   ` : ''}${this.api.readOnly ? badge('lock', 'READ ONLY', 'info') : badge('globe', 'READ / WRITE', 'success')}\n${scope || badge('globe', 'All accessible resources', 'muted')}`)
-    const tabs = compact => TABS.map((tab, i) => paint(i === this.tab ? `[${i + 1} ${icons[tabIcons[i]]} ${tab}]` : `${i + 1} ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, i === this.tab ? 'accent' : 'muted', i === this.tab))
+    const tabs = compact => TABS.map((tab, i) => i === this.tab
+      ? paint(`[${i + 1} ${icons[tabIcons[i]]} ${tab}]`, 'accent', true)
+      : `${paint(i + 1, 'accent', true)}${paint(` ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, 'muted')}`)
     const fullTabs = tabs(false)
     const compact = blessed.unicode.strWidth(clean(fullTabs.join('  '))) > this.tabs.width - 4
     const labels = compact ? tabs(true) : fullTabs
@@ -414,7 +416,7 @@ export class Dashboard {
       offset = range.end + 2
       return range
     }) : []
-    this.tabs.setContent(this.app ? labels.join('  ') : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
+    this.tabs.setContent(this.app ? labels.join('  ') : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${highlightKeys('· Enter an app', 'muted')}`)
     const appContext = Boolean(this.app)
     const footerContext = appContext ? this.pipeline ? 'pipeline-app' : 'app' : this.pipeline ? 'pipeline' : 'workspace'
     if (this.footerContext !== footerContext) {
@@ -481,7 +483,7 @@ export class Dashboard {
   }
 
   drawLanding() {
-    this.summary.setContent(`${badge('heroku', 'Your Heroku workspace')}\n\n${paint('Browse teams, pipelines, and apps with t / p / a. Select an item and press Enter.', 'muted')}`)
+    this.summary.setContent(`${badge('heroku', 'Your Heroku workspace')}\n\n${highlightKeys('Browse teams, pipelines, and apps with t / p / a. Select an item and press Enter.', 'muted')}`)
     this.main.setLabel(` ${icons.heroku}  Welcome `)
     this.setRows([{icon: 'pipelines', label: 'Choose a pipeline or app in the sidebar', detail: 'Navigation\n\nTab cycles between sidebar, list, and details.\nj/k, Ctrl-N/Ctrl-P, or arrow keys move through lists.\n/ filters the sidebar.\n? displays all shortcuts.\n\nUse --app, --pipeline, --remote, or --team to choose a starting context.'}])
   }
@@ -588,7 +590,7 @@ export class Dashboard {
     const scroll = this.detail.childBase
     const {app, formation, errors} = this.data
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', `${this.data.addons.length} add-ons`, 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
-    this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]}${TABS[this.tab] === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `)
+    this.main.setLabel(highlightKeys(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]}${TABS[this.tab] === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `))
     this.setRows(appRows(TABS[this.tab], this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
@@ -882,7 +884,7 @@ export class Dashboard {
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 16, ...frame(),
         label: ` ${icons.apps}  ${single(title)} `})
       this.modal = modal
-      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 3, content: clean(description), tags: false,
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 3, content: highlightKeys(description), tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const list = blessed.list({parent: modal, top: 5, bottom: 2, left: 2, right: 2, ...frame(), keys: true, mouse: true,
         items: choices.map(choice => single(choice.label)), style: {...frame().style, selected: {fg: palette.bg, bg: palette.accent}}})
@@ -1069,7 +1071,7 @@ export class Dashboard {
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const button = (content, left, tone) => blessed.box({parent: modal, bottom: 1, left, width: 22, height: 3, ...frame(),
-        content, align: 'center', valign: 'middle', mouse: true, tags: false,
+        content: highlightKeys(content), align: 'center', valign: 'middle', mouse: true, tags: false,
         style: {...frame().style, fg: palette[tone], border: {fg: palette[tone]}}})
       const proceed = button('Continue (y)', '25%-11', 'success')
       const cancel = button('Cancel (n)', '75%-11', 'muted')
@@ -1497,6 +1499,7 @@ export class Dashboard {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
       content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nAll text inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+    modal.setContent(highlightKeys(modal.content))
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
