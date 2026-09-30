@@ -181,6 +181,9 @@ test('add-on details show billed price, active limits, shared ownership, and pen
     state: 'upgrade pending', maxConnections: 200, ram: '4 GB', diskSize: '64 GB'}
   const resources = {provider: {available: true, version: '0.5.1'}, errors: {}, data: {addons: {byId: {postgres: item}}}}
   const [row] = appRows('Add-ons', data, {resources})
+  assert.equal(row.kind, 'addon')
+  assert.equal(row.value.id, data.addons[0].id)
+  assert.match(row.detail, /\[o\] open this add-on/)
   assert.match(row.detail, /\$200\.00\/month/)
   assert.match(row.detail, /Connection limit\s+200/)
   assert.match(row.detail, /RAM limit\s+4 GB/)

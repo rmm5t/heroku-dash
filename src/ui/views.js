@@ -116,8 +116,8 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
         ['Name', addon.name], ['Service', addon.addon_service?.name ?? enriched?.service], ['Plan', addon.plan?.name ?? enriched?.plan],
         ['State', state], ['Billing app', addon.app?.name], ['Created', addon.created_at],
         ['Attachments', attachments.filter(a => a.addon.id === addon.id).map(a => a.name).join(', ') || '—'],
-        ['Config keys', addon.config_vars?.join(', ')], ['ID', addon.id],
-      ]) + addonDetails(resources, addon.id), {...stateStyle(state), icon: /postgres|redis|mysql|mongo|key-value/i.test(addon.addon_service?.name ?? addon.plan?.name ?? '') ? 'database' : 'addons', emphasis: state,
+        ['Config keys', addon.config_vars?.join(', ')], ['ID', addon.id], ['Action', '[o] open this add-on’s management dashboard'],
+      ]) + addonDetails(resources, addon.id), {id: `addon:${addon.id}`, kind: 'addon', value: addon, ...stateStyle(state), icon: /postgres|redis|mysql|mongo|key-value/i.test(addon.addon_service?.name ?? addon.plan?.name ?? '') ? 'database' : 'addons', emphasis: state,
         columns: [addon.name, service, plan, state]}))
     }
   }

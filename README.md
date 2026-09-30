@@ -114,6 +114,8 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 
 ### Keyboard shortcuts
 
+In **3 Add-ons**, select an add-on and press **`o`** to open its specific management dashboard. Heroku Postgres and Key-Value Store open the selected datastore’s Overview page in the Heroku Dashboard; third-party add-ons use Heroku’s management/SSO link to reach the provider’s dashboard. Shared third-party add-ons use the current app’s attachment link when available. This uses read-only metadata and works in `--read-only` mode.
+
 | Key | Action |
 | --- | --- |
 | `t` / `p` / `a` | Browse teams / pipelines / apps |
@@ -128,7 +130,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | `h` / `l`, `[` / `]`, `←` / `→` | Previous / next app view |
 | `R` / `g` | Refresh the current app, pipeline, or workspace catalog |
 | `Ctrl-L` | Redraw the terminal |
-| `o` | Open the corresponding Heroku web dashboard page |
+| `o` | Open the corresponding Heroku web page; in Add-ons, open the selected add-on’s management dashboard |
 | `?` | Show keyboard help |
 | `q` / `Ctrl-C` | Quit (`q` closes help; `Ctrl-C` also exits from input prompts) |
 

@@ -138,6 +138,49 @@ export class HerokuAPI {
 
   config(app) { return this.get(`/apps/${encode(app)}/config-vars`) }
 
+  async addonDashboardUrl(addon, attachment, app) {
+    if (!addon?.id) throw new Error('Select an add-on to open its management dashboard.')
+    const datastoreURL = resource => {
+      const service = resource.addon_service?.name ?? resource.plan?.name?.split(':')[0]
+      const appName = app?.name ?? attachment?.app?.name ?? resource.app?.name
+      if (['heroku-postgresql', 'heroku-redis', 'heroku-key-value-store'].includes(service) && appName) {
+        return `https://dashboard.heroku.com/apps/${encode(appName)}/datastores/${encode(resource.id)}`
+      }
+      return null
+    }
+    // Heroku data services advertise generic SSO URLs too, but their management
+    // pages now live in Dashboard's app-scoped datastore routes.
+    let loadedAddon
+    if (app?.name && !addon.addon_service?.name && !addon.plan?.name?.includes(':')) {
+      loadedAddon = await this.get(`/addons/${encode(addon.id)}`, {timeout: 15_000})
+      addon = {...addon, ...loadedAddon}
+    }
+    const datastore = datastoreURL(addon)
+    if (datastore) return datastore
+    const validate = value => {
+      try {
+        const url = new URL(value)
+        if (['https:', 'http:'].includes(url.protocol)) return url.href
+      } catch { /* Report an invalid link without including its SSO parameters. */ }
+      throw new Error('This add-on does not provide a valid HTTP dashboard URL.')
+    }
+    if (attachment?.web_url) return validate(attachment.web_url)
+    if (attachment?.id) {
+      try {
+        const details = await this.get(`/addon-attachments/${encode(attachment.id)}`, {timeout: 15_000})
+        if (details?.web_url) return validate(details.web_url)
+      } catch (error) {
+        if (statusCode(error) !== 404) throw error
+      }
+    }
+    if (addon.web_url) return validate(addon.web_url)
+    const details = loadedAddon ?? await this.get(`/addons/${encode(addon.id)}`, {timeout: 15_000})
+    const resolvedDatastore = details && datastoreURL({...addon, ...details})
+    if (resolvedDatastore) return resolvedDatastore
+    if (details?.web_url) return validate(details.web_url)
+    throw new Error('This add-on does not provide a management dashboard.')
+  }
+
   async appRegions() {
     return (await this.list('/regions')).filter(region => !region.private_capable)
       .sort((a, b) => a.name.localeCompare(b.name))

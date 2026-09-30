@@ -1,6 +1,6 @@
 import blessed from 'blessed'
 import clipboard from 'clipboardy'
-import {spawn} from 'node:child_process'
+import {openExternalURL} from '../browser.js'
 import packageJSON from '../../package.json' with {type: 'json'}
 import {APP_STAGES, errorMessage, normalizeHostname, validateAppName} from '../api.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
@@ -148,9 +148,9 @@ function enableReadline(input, history, render) {
 export class Dashboard {
   constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
     fetchMetrics = (data, options) => fetchTelemetry(api, data, options), executeHeroku = executeHerokuCommand,
-    executeInteractiveHeroku = executeInteractiveHerokuCommand, appConfirm = new Map(), commandHistory = {entries: [], add() {}}}) {
+    executeInteractiveHeroku = executeInteractiveHerokuCommand, appConfirm = new Map(), commandHistory = {entries: [], add() {}}, openURL = openExternalURL}) {
     setTheme(theme)
-    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku, appConfirm, commandHistory})
+    Object.assign(this, {api, catalog, context, resources, refresh, demo, theme, writeClipboard, fetchMetrics, executeHeroku, executeInteractiveHeroku, appConfirm, commandHistory, openURL})
     this.screen = screen ?? createScreen()
     this.tab = 0
     this.tabRanges = []
@@ -179,6 +179,7 @@ export class Dashboard {
     this.commandRequest = null
     this.interactiveRequest = null
     this.promotionRequest = null
+    this.openingBrowser = false
     this.busy = false
     this.loading = new Map()
     this.loadingFrame = 0
@@ -318,7 +319,7 @@ export class Dashboard {
     key(['m'], () => void this.maintenance())
     key([':'], () => void this.customCommand())
     key(['C', 'S-c'], () => void this.customCommand('console'))
-    key(['o'], () => this.openBrowser())
+    key(['o'], () => void this.openBrowser())
     key(['?'], () => this.help())
   }
 
@@ -1458,25 +1459,43 @@ export class Dashboard {
     }
   }
 
-  openBrowser() {
+  async openBrowser() {
     if (this.demo) { this.setStatus('Browser links are disabled in the offline demo.'); return }
+    if (this.openingBrowser || this.closed) return
+    const app = this.app
+    const tab = this.tab
+    const generation = this.generation
+    const addonContext = Boolean(app && TABS[tab] === 'Add-ons')
+    const row = this.rows[this.main.selected]
+    const addon = addonContext && row?.kind === 'addon' ? row.value : null
+    if (addonContext && !addon) { this.setStatus('Select an add-on to open its management dashboard.', 'warning'); return }
+    const attachment = addon ? this.data?.attachments.find(item => item.addon.id === addon.id) : null
+    const current = () => !this.closed && generation === this.generation && this.tab === tab
+      && this.app?.id === app?.id && (!addon || this.rows[this.main.selected]?.value?.id === addon.id)
     let url
-    if (this.app) {
+    if (app && !addon) {
       const path = ['activity', 'resources', 'resources', 'settings', 'settings', 'activity', 'metrics'][this.tab]
-      url = `https://dashboard.heroku.com/apps/${encodeURIComponent(this.app.name)}/${path}`
+      url = `https://dashboard.heroku.com/apps/${encodeURIComponent(app.name)}/${path}`
     } else if (this.pipeline) url = `https://dashboard.heroku.com/pipelines/${encodeURIComponent(this.pipeline.id)}`
     else if (this.team) url = `https://dashboard.heroku.com/teams/${encodeURIComponent(this.team.name)}/apps`
     else url = 'https://dashboard.heroku.com/apps'
-    const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'rundll32' : 'xdg-open'
-    const child = spawn(command, process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url], {stdio: 'ignore'})
-    child.on('error', error => this.setStatus(`Unable to open browser: ${error.message}`, 'error'))
-    child.on('exit', code => this.setStatus(code === 0 ? 'Opened Heroku dashboard in your browser.' : `Browser exited with code ${code}.`, code === 0 ? 'success' : 'error'))
+    this.openingBrowser = true
+    const name = addon?.name ?? attachment?.name ?? 'selected add-on'
+    const finishLoading = this.beginLoading('browser', addon ? `Opening ${name} management dashboard…` : 'Opening Heroku dashboard…')
+    try {
+      if (addon) url = await this.api.addonDashboardUrl(addon, attachment, app)
+      if (!current()) return
+      await this.openURL(url)
+      if (current()) this.setStatus(addon ? `Opened ${name} management dashboard in your browser.` : 'Opened Heroku dashboard in your browser.', 'success')
+    } catch (error) {
+      if (current()) this.setStatus(`Unable to open browser: ${errorMessage(error)}`, 'error')
+    } finally { this.openingBrowser = false; finishLoading() }
   }
 
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })

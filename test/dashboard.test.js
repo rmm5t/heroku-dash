@@ -66,6 +66,105 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.tab, 6)
 })
 
+test('o in Add-ons opens the selected datastore, third-party SSO, or shared attachment dashboard', async t => {
+  const demo = createDemo()
+  const original = demo.api.appData.bind(demo.api)
+  const addons = [
+    {id: 'postgres-id', name: 'postgres-app', web_url: 'https://addons-sso.heroku.com/apps/app-staging/addons/postgres-id', addon_service: {name: 'heroku-postgresql'}},
+    {id: 'provider-id', name: 'provider-app', web_url: 'https://addons-sso.heroku.com/apps/app-staging/addons/provider-id', addon_service: {name: 'papertrail'}},
+    {id: 'redis-id', name: 'redis-app', web_url: 'https://addons-sso.heroku.com/apps/app-staging/addons/redis-id', addon_service: {name: 'heroku-redis'}},
+  ]
+  const sharedUrl = 'https://addons-sso.heroku.com/apps/app-staging/attachments/shared-attachment'
+  demo.api.appData = async id => ({...await original(id), addons, attachments: [
+    {id: 'shared-attachment', name: 'SHARED_DATABASE', addon: {id: 'shared-id', addon_service: {name: 'third-party-service'}}, web_url: sharedUrl},
+  ]})
+  const opened = []
+  const {dashboard: d, key} = await harness(t, {...demo, openURL: async url => { opened.push(url) }})
+  await key('\r')
+  await key('3')
+  assert.equal(d.api.readOnly, true)
+  for (const [id, expected] of [
+    ['postgres-id', 'https://dashboard.heroku.com/apps/constellation-staging/datastores/postgres-id'],
+    ['provider-id', addons[1].web_url],
+    ['redis-id', 'https://dashboard.heroku.com/apps/constellation-staging/datastores/redis-id'],
+    ['shared-id', sharedUrl],
+  ]) {
+    d.main.select(d.rows.findIndex(row => row.value?.id === id))
+    await key('o')
+    assert.equal(opened.at(-1), expected)
+    assert.match(d.message, /management dashboard in your browser/)
+  }
+  assert.equal(opened.length, 4)
+  assert.equal(d.openingBrowser, false)
+  assert.equal(d.loadingTimer, null)
+})
+
+test('o ignores late add-on link lookups after selection or view changes and suppresses repeated opens', async t => {
+  const demo = createDemo()
+  const original = demo.api.appData.bind(demo.api)
+  demo.api.appData = async id => ({...await original(id), addons: [{id: 'first', name: 'first'}, {id: 'second', name: 'second'}], attachments: []})
+  const pending = Promise.withResolvers()
+  let requests = 0
+  demo.api.addonDashboardUrl = async () => { requests++; return pending.promise }
+  const opened = []
+  const {dashboard: d, key} = await harness(t, {...demo, openURL: async url => { opened.push(url) }})
+  await key('\r')
+  await key('3')
+  await key('o')
+  await key('o')
+  assert.equal(requests, 1)
+  await key('j')
+  pending.resolve('https://provider.example.com/first')
+  await delay(20)
+  assert.deepEqual(opened, [])
+  assert.equal(d.openingBrowser, false)
+  const next = Promise.withResolvers()
+  d.api.addonDashboardUrl = async () => next.promise
+  await key('o')
+  await key('1')
+  next.resolve('https://provider.example.com/second')
+  await delay(20)
+  assert.deepEqual(opened, [])
+})
+
+test('o reports unavailable add-on links and browser errors without opening a generic app page', async t => {
+  const demo = createDemo()
+  const original = demo.api.appData.bind(demo.api)
+  demo.api.appData = async id => ({...await original(id), addons: [{id: 'addon', name: 'selected-addon'}], errors: {addons: 'Add-ons unavailable'}})
+  demo.api.addonDashboardUrl = async () => { throw new Error('Provider dashboard unavailable') }
+  const opened = []
+  const {dashboard: d, key} = await harness(t, {...demo, openURL: async url => { opened.push(url); throw new Error('Browser launcher unavailable') }})
+  await key('\r')
+  await key('3')
+  await key('o')
+  assert.match(d.message, /Select an add-on/)
+  d.main.select(d.rows.findIndex(row => row.kind === 'addon'))
+  await key('o')
+  assert.match(d.message, /Provider dashboard unavailable/)
+  assert.deepEqual(opened, [])
+  d.api.addonDashboardUrl = async () => 'https://provider.example.com/manage'
+  await key('o')
+  assert.match(d.message, /Browser launcher unavailable/)
+  assert.equal(opened.length, 1)
+  assert.equal(d.openingBrowser, false)
+  assert.equal(d.loadingTimer, null)
+})
+
+test('o retains app and pipeline browser navigation and is disabled in the offline demo', async t => {
+  const opened = []
+  const {dashboard: d, key} = await harness(t, {openURL: async url => { opened.push(url) }})
+  await key('o')
+  assert.equal(opened.at(-1), 'https://dashboard.heroku.com/pipelines/pipeline-demo')
+  await key('\r')
+  await key('5')
+  await key('o')
+  assert.equal(opened.at(-1), 'https://dashboard.heroku.com/apps/constellation-staging/settings')
+  d.demo = true
+  await key('o')
+  assert.match(d.message, /disabled in the offline demo/)
+  assert.equal(opened.length, 2)
+})
+
 test('exact-app confirmation instructions remain visible when long descriptions scroll and the terminal resizes', async t => {
   const {dashboard: d, screen, key} = await harness(t)
   await key('\r')

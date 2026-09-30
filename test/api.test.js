@@ -19,6 +19,71 @@ test('list rejects a repeated pagination cursor', async () => {
   await assert.rejects(api.list('/apps'), /Repeated pagination/)
 })
 
+test('add-on dashboards use authoritative datastore and third-party SSO links, preferring the current attachment', async () => {
+  const api = new HerokuAPI({request() { assert.fail('Cached dashboard URLs should not make requests') }}, {readOnly: true})
+  const datastore = 'https://data.heroku.com/datastores/database-id'
+  const owner = 'https://addons-sso.heroku.com/apps/owner-app/addons/addon-id'
+  const current = 'https://addons-sso.heroku.com/apps/current-app/attachments/attachment-id'
+  assert.equal(await api.addonDashboardUrl({id: 'postgres-addon', web_url: datastore}), datastore)
+  assert.equal(await api.addonDashboardUrl({id: 'third-party', web_url: owner}), owner)
+  assert.equal(await api.addonDashboardUrl({id: 'shared-addon', web_url: owner}, {id: 'attachment-id', web_url: current}), current)
+})
+
+test('Heroku Postgres and Key-Value Store bypass generic SSO links and open current-app datastore overview', async () => {
+  const api = new HerokuAPI({request() { assert.fail('Known datastore links should not need a lookup') }}, {readOnly: true})
+  const sso = 'https://addons-sso.heroku.com/apps/owner-app/addons/addon-id'
+  for (const service of ['heroku-postgresql', 'heroku-redis', 'heroku-key-value-store']) {
+    const addon = {id: 'addon-id', addon_service: {name: service}, app: {name: 'owner-app'}, web_url: sso}
+    assert.equal(await api.addonDashboardUrl(addon, {web_url: sso}, {name: 'current-app'}),
+      'https://dashboard.heroku.com/apps/current-app/datastores/addon-id')
+    assert.equal(await api.addonDashboardUrl(addon),
+      'https://dashboard.heroku.com/apps/owner-app/datastores/addon-id')
+  }
+})
+
+test('shared datastore stubs resolve service metadata before opening an attachment SSO link', async () => {
+  const paths = []
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(options.method, 'GET')
+    paths.push(path)
+    return {body: {id: 'shared-addon', addon_service: {name: 'heroku-postgresql'}, app: {name: 'owner-app'}}}
+  }}, {readOnly: true})
+  assert.equal(await api.addonDashboardUrl({id: 'shared-addon', plan: {name: 'essential-0'}}, {web_url: 'https://addons-sso.heroku.com/apps/current-app/attachments/id'}, {name: 'current-app'}),
+    'https://dashboard.heroku.com/apps/current-app/datastores/shared-addon')
+  assert.deepEqual(paths, ['/addons/shared-addon'])
+})
+
+test('missing dashboard metadata is loaded using GET-only attachment and add-on endpoints', async () => {
+  const calls = []
+  const url = 'https://addons-sso.heroku.com/apps/current-app/attachments/attachment-id'
+  const api = new HerokuAPI({async request(path, options) {
+    calls.push({path, method: options.method})
+    assert.equal(options.method, 'GET')
+    return {body: {web_url: url}}
+  }}, {readOnly: true})
+  assert.equal(await api.addonDashboardUrl({id: 'addon-id'}, {id: 'attachment-id'}), url)
+  assert.equal(await api.addonDashboardUrl({id: 'addon-id'}), url)
+  assert.deepEqual(calls, [
+    {path: '/addon-attachments/attachment-id', method: 'GET'}, {path: '/addons/addon-id', method: 'GET'},
+  ])
+})
+
+test('add-on dashboard lookup handles removed attachments, permission failures, and invalid links', async () => {
+  const url = 'https://data.heroku.com/datastores/database-id'
+  let status = 404
+  const api = new HerokuAPI({async request() { throw {statusCode: status} }})
+  assert.equal(await api.addonDashboardUrl({id: 'addon-id', web_url: url}, {id: 'removed-attachment'}), url)
+  status = 403
+  await assert.rejects(api.addonDashboardUrl({id: 'addon-id', web_url: url}, {id: 'attachment-id'}), error => error.statusCode === 403)
+  await assert.rejects(api.addonDashboardUrl({id: 'addon-id', web_url: 'javascript:alert("sso-secret")'}), error => {
+    assert.match(error.message, /valid HTTP dashboard URL/)
+    assert.ok(!error.message.includes('sso-secret'))
+    return true
+  })
+  api.client.request = async () => ({body: {}})
+  await assert.rejects(api.addonDashboardUrl({id: 'addon-id'}), /does not provide a management dashboard/)
+})
+
 test('read-only mode rejects every write before transport', async () => {
   let calls = 0
   const api = new HerokuAPI({async request() { calls++; return {body: {}} }}, {readOnly: true})
