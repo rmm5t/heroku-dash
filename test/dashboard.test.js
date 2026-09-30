@@ -1359,11 +1359,21 @@ test('h/l wrap through views in every pane without opening selected items', asyn
   assert.equal(d.tab, 0)
 })
 
-test('filter input receives shortcut letters without changing navigation', async t => {
+test('filter input supports readline editing of long pre-filled values without changing navigation', async t => {
   const {dashboard: d, key} = await harness(t)
+  d.filter = 'x'.repeat(200) + 'stellation'
   await key('/')
   assert.ok(d.modal)
-  await key('constellation')
+  const input = d.modal.children.find(child => child.type === 'textbox')
+  assert.equal(input.getValue(), d.filter)
+  assert.ok(d.screen.program.x >= input.lpos.xi + input.ileft)
+  assert.ok(d.screen.program.x < input.lpos.xl - input.iright)
+  await key('\x05' + '\x02'.repeat('stellation'.length) + '\x15')
+  assert.equal(input.getValue(), 'stellation')
+  await key('\x01')
+  await key('con')
+  await key('\x05')
+  assert.equal(input.getValue(), 'constellation')
   assert.equal(d.mode, 'pipelines')
   assert.equal(d.closed, false)
   await key('\r')
@@ -1744,22 +1754,25 @@ test('scale cancellation and mismatched confirmation never call the API', async 
   assert.match(d.message, /did not match/)
 })
 
-test('confirmed scaling sends exact app, process, count, and size to mocked API', async t => {
+test('scaling prompts edit pre-filled inputs with readline and send exact values to the API', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
   const writes = []
   demo.api.scale = async (...args) => { writes.push(args) }
-  const {key} = await harness(t, demo)
+  const {dashboard: d, key} = await harness(t, demo)
   await key('\r')
   await key('2')
   await key('s')
-  await key('\x15')
+  await key('\x01\x04')
   await key('3')
   await key('\r')
+  await key('\x02\x02\x04')
+  await key('2')
+  assert.equal(d.modal.children.find(child => child.type === 'textbox').getValue(), 'Standard-2X')
   await key('\r')
   await key('constellation-staging')
   await key('\r')
-  assert.deepEqual(writes, [['constellation-staging', 'web', 3, 'Standard-1X', 'constellation-staging']])
+  assert.deepEqual(writes, [['constellation-staging', 'web', 3, 'Standard-2X', 'constellation-staging']])
 })
 
 test('slow app response cannot overwrite a newer selection', async t => {
@@ -1778,7 +1791,7 @@ test('slow app response cannot overwrite a newer selection', async t => {
   assert.equal(d.data.app.name, 'constellation-production')
 })
 
-test('config editing masks typed secrets and requires app-name confirmation', async t => {
+test('config name and masked value prompts support readline editing and require app-name confirmation', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
   const writes = []
@@ -1787,16 +1800,40 @@ test('config editing masks typed secrets and requires app-name confirmation', as
   await key('\r')
   await key('4')
   await key('n')
-  await key('NEW_SECRET')
+  await key('NEW_SCRET')
+  await key('\x01' + '\x06'.repeat(5))
+  await key('E')
+  assert.equal(d.modal.children.find(child => child.type === 'textbox').getValue(), 'NEW_SECRET')
   await key('\r')
-  await key('never-display-this')
-  const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
-  assert.ok(!visible.includes('never-display-this'))
+  const input = d.modal.children.find(child => child.type === 'textbox')
+  const assertMasked = (value, cursor = [...value].length) => {
+    assert.equal(input.getValue(), value)
+    assert.equal(input.content, '*'.repeat([...value].length))
+    assert.equal(screen.program.x, input.lpos.xi + input.ileft + cursor)
+    const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
+    assert.ok(!visible.includes('display-'))
+    assert.ok(!visible.includes('密'))
+    assert.ok(!visible.includes('🔑'))
+  }
+  await key('display-密🔑')
+  assertMasked('display-密🔑')
+  await key('\x01')
+  assertMasked('display-密🔑', 0)
+  await key('never-')
+  assertMasked('never-display-密🔑', 6)
+  await key('\x05\x02\x02\x0b')
+  assertMasked('never-display-')
+  await key('\x19')
+  assertMasked('never-display-密🔑')
+  await key('\x17')
+  assertMasked('')
+  await key('\x19')
+  assertMasked('never-display-密🔑')
   await key('\r')
   assert.equal(writes.length, 0)
   await key('constellation-staging')
   await key('\r')
-  assert.deepEqual(writes, [['constellation-staging', 'NEW_SECRET', 'never-display-this', 'constellation-staging']])
+  assert.deepEqual(writes, [['constellation-staging', 'NEW_SECRET', 'never-display-密🔑', 'constellation-staging']])
   assert.equal(d.modal, null)
 })
 

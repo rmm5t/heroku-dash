@@ -41,7 +41,7 @@ function enableReadline(input, history, render) {
   let draft = input.getValue()
   let killed = ''
   let viewStart = 0
-  const display = value => value.replaceAll('\t', input.screen.tabc)
+  const display = value => input.censor ? '*'.repeat([...value].length) : value.replaceAll('\t', input.screen.tabc)
   const width = value => blessed.unicode.strWidth(display(value))
   const updateCursor = () => {
     if (input.screen.focused !== input) return
@@ -137,12 +137,14 @@ function enableReadline(input, history, render) {
     } else if (key.name === 'backspace') {
       if (cursor > 0) characters.splice(--cursor, 1)
     } else if (ch && !/^[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]$/.test(ch)) {
-      const inserted = [...ch]
-      characters.splice(cursor, 0, ...inserted)
-      cursor += inserted.length
+      // Blessed emits surrogate halves separately; combine them before indexing.
+      const prefix = characters.slice(0, cursor).join('') + ch
+      characters = [...prefix, ...characters.slice(cursor)]
+      cursor = [...prefix].length
     }
     refresh()
   }
+  refresh()
 }
 
 export class Dashboard {
@@ -826,7 +828,7 @@ export class Dashboard {
     this.render()
   }
 
-  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history, readline = false, confirmationApp} = {}) {
+  prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history, confirmationApp} = {}) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
       const previous = this.screen.focused
@@ -838,8 +840,8 @@ export class Dashboard {
         content: `Target: ${paint(single(confirmationApp), 'warning', true)}\nType the exact app name above to apply this change.`,
         style: {fg: palette.warning, bg: palette.bg}})
       const input = blessed.textbox({parent: modal, top: confirmationApp ? 11 : 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
-      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', readline ? 'kill left' : 'clear')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
-      if (readline) enableReadline(input, history ?? [], () => this.render())
+      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', 'kill left')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
+      enableReadline(input, history ?? [], () => this.render())
       let finished = false
       const finish = value => {
         if (finished) return
@@ -855,7 +857,6 @@ export class Dashboard {
       input.on('submit', value => finish(value))
       input.on('cancel', () => finish(null))
       input.key(['C-c'], () => this.close())
-      if (!readline) input.key(['C-u'], () => { input.clearValue(); this.render() })
       input.focus()
       this.render()
     })
@@ -868,7 +869,7 @@ export class Dashboard {
   }
 
   async confirm(app, description, {highlightFirstLine = false} = {}) {
-    const value = await this.prompt('Confirm remote change', description, '', {icon: 'warning', tone: 'warning', highlightFirstLine, readline: true, confirmationApp: app.name})
+    const value = await this.prompt('Confirm remote change', description, '', {icon: 'warning', tone: 'warning', highlightFirstLine, confirmationApp: app.name})
     if (value === null) { this.setStatus('Change cancelled.'); return null }
     if (value !== app.name) { this.setStatus('App name did not match. Nothing changed.', 'warning'); return null }
     return value
@@ -934,7 +935,7 @@ export class Dashboard {
     const stage = await this.choose(`${title} · Stage`, 'Choose the pipeline stage for the new app.',
       APP_STAGES.map(value => ({label: value, value})), 1)
     if (stage === null || !current()) return
-    const entered = await this.prompt(`${title} · Name`, `Stage: ${stage}\nEnter a globally unique app name (3–30 lowercase letters, digits, or hyphens).`, '', {icon: 'apps', readline: true})
+    const entered = await this.prompt(`${title} · Name`, `Stage: ${stage}\nEnter a globally unique app name (3–30 lowercase letters, digits, or hyphens).`, '', {icon: 'apps'})
     if (entered === null || !current()) return
     const name = entered.trim()
     try { validateAppName(name) }
@@ -1300,7 +1301,7 @@ export class Dashboard {
     const app = this.app
     const generation = this.generation
     const current = () => !this.closed && generation === this.generation && this.app?.id === app.id
-    const entered = await this.prompt('Add Domain · hostname', `${app.name}\nEnter a domain hostname, such as www.example.com.\nConfigure your DNS provider using the CNAME shown after creation.`, '', {icon: 'globe', readline: true})
+    const entered = await this.prompt('Add Domain · hostname', `${app.name}\nEnter a domain hostname, such as www.example.com.\nConfigure your DNS provider using the CNAME shown after creation.`, '', {icon: 'globe'})
     if (entered === null || !current()) return
     let hostname
     try { hostname = normalizeHostname(entered) }
@@ -1342,7 +1343,7 @@ export class Dashboard {
     if (this.demo) { this.setStatus('Heroku commands are disabled in the offline demo.', 'warning'); return }
     if (this.api.readOnly) { this.setStatus('Read-only mode: custom Heroku commands are disabled.', 'warning'); return }
     const app = this.app
-    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code', history: this.commandHistory.entries, readline: true})
+    const value = initialCommand ?? await this.prompt(`Heroku command · ${app.name}`, `Enter the command after "heroku". The current app is added automatically.\nExample: logs --num 100\n\nConsole and Heroku run commands use the terminal interactively. App and remote selectors are rejected.`, '', {icon: 'code', history: this.commandHistory.entries})
     if (value === null) return
     let args
     try { args = scopedHerokuCommand(value, app.name, {appConfirm: this.appConfirm}) }
@@ -1495,7 +1496,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nAll text inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
