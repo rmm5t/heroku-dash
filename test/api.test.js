@@ -27,6 +27,7 @@ test('read-only mode rejects every write before transport', async () => {
   await assert.rejects(api.restart('app', 'web.1', 'dyno', 'app'), /Read-only/)
   await assert.rejects(api.setConfig('app', 'KEY', 'value', 'app'), /Read-only/)
   await assert.rejects(api.maintenance('app', true, 'app'), /Read-only/)
+  await assert.rejects(api.createPipelineApp({name: 'new-app'}, 'new-app'), /Read-only/)
   for (const method of ['PATCH', 'POST', 'DELETE', 'PUT', 'patch']) await assert.rejects(api.request('/apps/app', {method}), /Read-only/)
   assert.equal(calls, 0)
 })
@@ -65,6 +66,55 @@ test('confirmed mutations target exactly the app and process requested', async (
     ['PATCH', '/apps/staging/config-vars', {DELETE: null}],
     ['PATCH', '/apps/staging', {maintenance: true}],
   ])
+})
+
+test('app creation validates inputs before creating any remote resource', async () => {
+  const api = new HerokuAPI({request() { assert.fail('Invalid creation reached network') }})
+  const options = {pipeline: {id: 'pipeline-id', owner: {type: 'user', id: 'user-id'}}, stage: 'staging', name: 'new-app', region: 'eu'}
+  await assert.rejects(api.createPipelineApp(options, 'other-app'), /exact app name/)
+  for (const name of ['ab', 'Bad-name', 'bad-', '3bad', 'a'.repeat(31)]) {
+    await assert.rejects(api.createPipelineApp({...options, name}, name), /App names/)
+  }
+  await assert.rejects(api.createPipelineApp({...options, stage: 'review'}, options.name), /development, staging, or production/)
+  await assert.rejects(api.createPipelineApp({...options, region: ''}, options.name), /runtime region/)
+  await assert.rejects(api.createPipelineApp({...options, pipeline: {id: 'unknown-owner'}}, options.name), /ownership/)
+})
+
+test('app creation uses pipeline ownership and couples the new app by ID', async () => {
+  const calls = []
+  const api = new HerokuAPI({async request(path, options) {
+    calls.push({path, ...options})
+    return {body: path === '/teams/team-id' ? {id: 'team-id', name: 'acme'} : {id: 'new-id', name: 'new-app'}}
+  }})
+  const pipeline = {id: 'pipeline-id', name: 'service', owner: {type: 'team', id: 'team-id'}}
+  const created = await api.createPipelineApp({pipeline, stage: 'staging', name: 'new-app', region: 'eu'}, 'new-app')
+  assert.equal(created.stage, 'staging')
+  assert.deepEqual(calls.map(({method, path, body}) => [method, path, body]), [
+    ['GET', '/teams/team-id', undefined],
+    ['POST', '/teams/apps', {name: 'new-app', region: 'eu', team: 'acme'}],
+    ['POST', '/pipeline-couplings', {app: 'new-id', pipeline: 'pipeline-id', stage: 'staging'}],
+  ])
+  calls.length = 0
+  await api.createPipelineApp({pipeline: {...pipeline, owner: {type: 'user', id: 'user-id'}}, stage: 'production', name: 'new-app', region: 'us'}, 'new-app')
+  assert.deepEqual(calls[0].body, {name: 'new-app', region: 'us', personal: true})
+})
+
+test('runtime regions exclude Private Spaces and creation reports a partial attachment failure', async () => {
+  const calls = []
+  const app = {id: 'new-id', name: 'new-app'}
+  const api = new HerokuAPI({async request(path, options) {
+    calls.push({path, ...options})
+    if (path === '/regions') return {body: [{name: 'us'}, {name: 'virginia', private_capable: true}, {name: 'eu'}]}
+    if (path === '/pipeline-couplings') throw new Error('Attachment denied')
+    return {body: app}
+  }})
+  assert.deepEqual((await api.appRegions()).map(region => region.name), ['eu', 'us'])
+  await assert.rejects(api.createPipelineApp({pipeline: {id: 'pipe', name: 'service', owner: null}, stage: 'development', name: app.name, region: 'us'}, app.name), error => {
+    assert.equal(error.createdApp, app)
+    assert.match(error.message, /was created.*service failed: Attachment denied/)
+    return true
+  })
+  assert.ok(!calls.some(call => call.method === 'DELETE'))
 })
 
 test('app sections fail independently and config is fetched lazily', async () => {

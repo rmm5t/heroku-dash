@@ -1,5 +1,12 @@
 const V3 = 'application/vnd.heroku+json; version=3'
 const encode = encodeURIComponent
+export const APP_STAGES = ['development', 'staging', 'production']
+
+export function validateAppName(name) {
+  if (!/^[a-z][a-z0-9-]{1,28}[a-z0-9]$/.test(name ?? '')) {
+    throw new Error('App names must be 3–30 lowercase letters, digits, or hyphens, start with a letter, and end with a letter or digit.')
+  }
+}
 
 export function statusCode(error) {
   return error.statusCode ?? error.status ?? error.response?.statusCode ?? error.http?.statusCode ?? error.http?.http?.statusCode
@@ -100,6 +107,37 @@ export class HerokuAPI {
   }
 
   config(app) { return this.get(`/apps/${encode(app)}/config-vars`) }
+
+  async appRegions() {
+    return (await this.list('/regions')).filter(region => !region.private_capable)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async createPipelineApp({pipeline, stage, name, region}, confirmation) {
+    this.confirm(name, confirmation)
+    validateAppName(name)
+    if (!pipeline?.id) throw new Error('Select a pipeline before creating an app.')
+    if (!APP_STAGES.includes(stage)) throw new Error('Select development, staging, or production.')
+    if (!region?.trim()) throw new Error('Select a runtime region.')
+    if (!Object.hasOwn(pipeline, 'owner')) throw new Error('Pipeline ownership is unavailable. Refresh the pipeline and try again.')
+    const owner = pipeline.owner
+    if (owner && !['team', 'user'].includes(owner.type)) throw new Error('Unsupported pipeline owner type.')
+    let team
+    if (owner?.type === 'team') {
+      if (!owner.id) throw new Error('Pipeline team ownership is unavailable.')
+      team = await this.get(`/teams/${encode(owner.id)}`)
+      if (!team?.name) throw new Error('Pipeline team name is unavailable.')
+    }
+    const app = await this.get('/teams/apps', {method: 'POST', body: {
+      name, region, ...(team ? {team: team.name} : {personal: true}),
+    }})
+    try {
+      await this.get('/pipeline-couplings', {method: 'POST', body: {app: app.id, pipeline: pipeline.id, stage}})
+    } catch (error) {
+      throw Object.assign(new Error(`App ${app.name} was created, but adding it to pipeline ${pipeline.name} failed: ${errorMessage(error)}`), {createdApp: app})
+    }
+    return {...app, stage}
+  }
 
   async scale(app, type, quantity, size, confirmation) {
     this.confirm(app, confirmation)

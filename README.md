@@ -117,6 +117,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | Key | Action |
 | --- | --- |
 | `t` / `p` / `a` | Browse teams / pipelines / apps |
+| `A` / `Shift-A` | Create a new app in the selected pipeline workspace |
 | `j` / `k`, `↑` / `↓` | Move selection, or scroll the focused details pane |
 | `Enter` | Open the selected item |
 | `Tab` / `Shift-Tab` | Focus the next / previous pane |
@@ -149,6 +150,8 @@ App actions:
 In prompts, `Enter` continues, `Esc` cancels, and `Ctrl-U` clears the input. Config-value input is masked. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
 
 ## Remote changes and config values
+
+In a pipeline workspace, press **`A`** to create an app. Choose development, staging, or production, enter a globally unique app name, and select a Common Runtime region fetched from Heroku. The summary shows the pipeline, stage, owner, and region and requires typing the new app’s exact name. Apps are created in the pipeline’s team (or your personal account for a personal pipeline), then added to that pipeline. The workspace refreshes and selects the new app. If pipeline attachment fails after creation, the app remains accessible and the status explains the failure. App creation is disabled in read-only and demo modes.
 
 Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Pressing `x` on a process scales it to zero; use `s` to scale it back up. Individual dynos can be restarted but not stopped through the dashboard because Heroku automatically replaces stopped formation dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
 

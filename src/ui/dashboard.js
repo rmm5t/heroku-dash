@@ -2,7 +2,7 @@ import blessed from 'blessed'
 import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import packageJSON from '../../package.json' with {type: 'json'}
-import {errorMessage} from '../api.js'
+import {APP_STAGES, errorMessage, validateAppName} from '../api.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {fetchTelemetry, metricsScope} from '../metrics.js'
@@ -271,6 +271,7 @@ export class Dashboard {
     key(['t'], () => this.setMode('teams'))
     key(['p'], () => this.setMode('pipelines'))
     key(['a'], () => this.setMode('apps'))
+    key(['A', 'S-a'], () => void this.addApp())
     key(['/'], () => void this.filterNav())
     key(['R', 'S-r', 'g'], () => void this.reload())
     key(['[', 'left', 'h'], () => this.changeTab((this.tab + TABS.length - 1) % TABS.length))
@@ -389,9 +390,10 @@ export class Dashboard {
     }) : []
     this.tabs.setContent(this.app ? labels.join('  ') : `${badge('pipelines', 'PIPELINE WORKSPACE')}  ${paint('· Enter an app', 'muted')}`)
     const appContext = Boolean(this.app)
-    if (this.footerAppContext !== appContext) {
-      this.footerAppContext = appContext
-      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
+    const footerContext = appContext ? 'app' : this.pipeline ? 'pipeline' : 'workspace'
+    if (this.footerContext !== footerContext) {
+      this.footerContext = footerContext
+      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console']] : this.pipeline ? [['A', 'add app']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
       this.footer.setContent(`${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${secondRow.map(([key, text]) => shortcut(key, text)).join('  ')}`)
     }
     this.drawStatus()
@@ -485,9 +487,9 @@ export class Dashboard {
         label: `${app.stage.toUpperCase().padEnd(13)} ${single(app.name)}  ·  ${app.region?.name ?? '—'}`,
         columns: [app.stage.toUpperCase(), app.name, app.region?.name, app.stack?.name], columnLayout: 'Pipeline apps',
         detail: `${single(app.name)}\n\nStage: ${app.stage}\nTeam: ${single(app.team?.name ?? 'Personal / shared')}\nRegion: ${single(app.region?.name)}\nStack: ${single(app.stack?.name)}\n\nEnter to view resources, add-ons, config, settings, releases, and metrics.`,
-      })) : [{icon: 'apps', tone: 'muted', label: 'This pipeline has no apps', detail: 'Press a to browse accessible apps.'}])
+      })) : [{icon: 'apps', tone: 'muted', label: 'This pipeline has no apps', detail: 'Press A to create an app in this pipeline, or a to browse accessible apps.'}])
       this.main.focus()
-      this.message = `Pipeline loaded. Select an app and press Enter.${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
+      this.message = `Pipeline loaded. Select an app and press Enter, or press A to add an app.${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
       this.messageTone = hierarchy.errors.hierarchy ? 'warning' : 'success'
     } catch (error) {
       if (generation === this.generation) {
@@ -835,6 +837,105 @@ export class Dashboard {
     return value
   }
 
+  choose(title, description, choices, initial = 0) {
+    if (this.closed) return Promise.resolve(null)
+    return new Promise(resolve => {
+      const previous = this.screen.focused
+      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 16, ...frame(),
+        label: ` ${icons.apps}  ${single(title)} `})
+      this.modal = modal
+      blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 3, content: clean(description), tags: false,
+        style: {fg: palette.fg, bg: palette.bg}})
+      const list = blessed.list({parent: modal, top: 5, bottom: 2, left: 2, right: 2, ...frame(), keys: true, mouse: true,
+        items: choices.map(choice => single(choice.label)), style: {...frame().style, selected: {fg: palette.bg, bg: palette.accent}}})
+      blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('↑/↓', 'select')}   ${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}`, style: {bg: palette.bg}})
+      let finished = false
+      const finish = value => {
+        if (finished) return
+        finished = true
+        this.cancelPrompt = null
+        modal.destroy()
+        this.modal = null
+        if (!this.closed) { previous?.focus(); this.render() }
+        resolve(value)
+      }
+      this.cancelPrompt = () => finish(null)
+      list.on('select', (_item, index) => finish(choices[index].value))
+      list.key(['escape'], () => finish(null))
+      list.select(Math.max(0, initial))
+      list.focus()
+      this.render()
+    })
+  }
+
+  async addApp() {
+    if (!this.pipeline || this.app || this.busy) return
+    if (this.demo) { this.setStatus('App creation is disabled in the offline demo.', 'warning'); return }
+    if (this.api.readOnly) { this.setStatus('Read-only mode: app creation is disabled.', 'warning'); return }
+    let pipeline = this.pipeline
+    const generation = this.generation
+    const current = () => !this.closed && this.generation === generation && !this.app && this.pipeline?.id === pipeline.id
+    const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
+      content: `\n  ${badge('refresh', 'Loading Add App options…', 'info')}`})
+    this.modal = loading
+    this.busy = true
+    const finishLoading = this.beginLoading('app-options', 'Loading runtime regions…')
+    let regions
+    try {
+      const [available, details] = await Promise.all([
+        this.api.appRegions(),
+        Object.hasOwn(pipeline, 'owner') ? pipeline : this.api.get(`/pipelines/${encodeURIComponent(pipeline.id)}`),
+      ])
+      regions = available
+      pipeline = details
+      if (!regions.length) throw new Error('No Common Runtime regions are available.')
+    } catch (error) { this.setStatus(errorMessage(error), 'error'); return }
+    finally { loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    if (!current()) return
+    const title = `Add App · ${pipeline.name}`
+    const stage = await this.choose(`${title} · Stage`, 'Choose the pipeline stage for the new app.',
+      APP_STAGES.map(value => ({label: value, value})), 1)
+    if (stage === null || !current()) return
+    const entered = await this.prompt(`${title} · Name`, `Stage: ${stage}\nEnter a globally unique app name (3–30 lowercase letters, digits, or hyphens).`, '', {icon: 'apps', readline: true})
+    if (entered === null || !current()) return
+    const name = entered.trim()
+    try { validateAppName(name) }
+    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
+    const region = await this.choose(`${title} · Region`, 'Choose the location of the app’s Common Runtime.',
+      regions.map(item => ({label: `${item.name} · ${item.description ?? item.name}`, value: item.name})),
+      regions.findIndex(item => item.name === 'us'))
+    if (region === null || !current()) return
+    const owner = pipeline.owner?.type === 'team'
+      ? this.catalog.teams.find(team => team.id === pipeline.owner.id)?.name ?? pipeline.owner.id
+      : 'Personal account'
+    const confirmation = await this.confirm({name}, `Create ${name}\nPipeline: ${pipeline.name} · Stage: ${stage}\nRegion: ${region} · Owner: ${owner}`, {highlightFirstLine: true})
+    if (!confirmation || !current()) return
+    const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
+      content: `\n  ${badge('refresh', `Creating ${name}…`, 'info')}`})
+    this.modal = modal
+    this.busy = true
+    const finishCreation = this.beginLoading('app-create', `Creating ${name} in ${pipeline.name}…`)
+    try {
+      const app = await this.api.createPipelineApp({pipeline, stage, name, region}, confirmation)
+      this.catalog.apps = [...this.catalog.apps.filter(item => item.id !== app.id), app].sort((a, b) => a.name.localeCompare(b.name))
+      if (this.closed) return
+      await this.openPipeline(pipeline)
+      this.drawNav()
+      const index = this.rows.findIndex(row => row.value?.id === app.id)
+      if (index >= 0) this.main.select(index)
+      const refreshed = this.rows.some(row => row.value?.id === app.id)
+      this.setStatus(refreshed
+        ? `Created ${name} in ${pipeline.name} (${stage}, ${region}).`
+        : `Created ${name}, but the pipeline view could not be refreshed. Press R to retry.`, refreshed ? 'success' : 'warning')
+    } catch (error) {
+      if (error.createdApp) {
+        this.catalog.apps.push(error.createdApp)
+        if (!this.closed) this.drawNav()
+      }
+      if (!this.closed) this.setStatus(errorMessage(error), 'error')
+    } finally { modal.destroy(); this.modal = null; this.busy = false; finishCreation(); this.render() }
+  }
+
   confirmChoice(title, description, {highlightFirstLine = false} = {}) {
     if (this.closed) return Promise.resolve(false)
     return new Promise(resolve => {
@@ -1138,7 +1239,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()

@@ -47,11 +47,13 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   const {dashboard: d, key} = await harness(t)
   assert.equal(d.rows[0].kind, 'app')
   assert.ok(!clean(d.footer.content).includes(': command'))
+  assert.ok(clean(d.footer.content).includes('A add app'))
   assert.ok(!clean(d.footer.content).includes('C console'))
   assert.ok(!clean(d.footer.content).includes('Esc back'))
   await key('\r')
   assert.equal(d.app.name, 'constellation-staging')
   assert.ok(clean(d.footer.content).includes(': command'))
+  assert.ok(!clean(d.footer.content).includes('A add app'))
   assert.ok(clean(d.footer.content).includes('C console'))
   for (let tab = 1; tab <= 7; tab++) {
     await key(String(tab))
@@ -62,6 +64,134 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   await key('\x1b')
   assert.equal(d.app, app)
   assert.equal(d.tab, 6)
+})
+
+test('Shift-A creates an app in the pipeline with chosen stage and region after exact-name confirmation', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const writes = []
+  const apps = await demo.api.pipelineApps()
+  demo.api.appRegions = async () => [{name: 'eu', description: 'Europe'}, {name: 'us', description: 'United States'}]
+  demo.api.pipelineApps = async () => apps
+  demo.api.createPipelineApp = async (options, confirmation) => {
+    writes.push({options, confirmation})
+    const app = {id: 'new-app-id', name: options.name, stage: options.stage, region: {name: options.region}, team: demo.catalog.teams[0]}
+    apps.push(app)
+    return app
+  }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('A')
+  assert.match(d.modal._label.content, /Add App.*Stage/)
+  assert.deepEqual(d.modal.children.find(child => child.type === 'list').items.map(item => item.content), ['development', 'staging', 'production'])
+  await key('\x1b[B')
+  await key('\r')
+  assert.match(d.modal._label.content, /Name/)
+  await key('new-service-app')
+  await key('\r')
+  assert.match(d.modal._label.content, /Region/)
+  await key('\x1b[A')
+  await key('\r')
+  assert.match(d.modal._label.content, /Confirm remote change/)
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /production.*\nRegion: eu · Owner: acme/)
+  assert.equal(writes.length, 0)
+  await key('new-service-app')
+  await key('\r')
+  assert.deepEqual(writes, [{options: {pipeline: demo.context.pipeline, stage: 'production', name: 'new-service-app', region: 'eu'}, confirmation: 'new-service-app'}])
+  assert.equal(d.app, null)
+  assert.equal(d.rows[d.main.selected].value.name, 'new-service-app')
+  assert.ok(d.catalog.apps.some(app => app.name === 'new-service-app'))
+  assert.match(d.message, /Created new-service-app/)
+  assert.equal(d.modal, null)
+})
+
+test('Add App is pipeline-only, respects read-only/demo modes, and supports cancellation and validation', async t => {
+  let writes = 0
+  const {dashboard: d, key} = await harness(t)
+  d.api.appRegions = async () => [{name: 'us'}]
+  d.api.createPipelineApp = async () => { writes++; assert.fail('Unconfirmed creation') }
+  await key('A')
+  assert.match(d.message, /Read-only/)
+  d.api.readOnly = false
+  d.demo = true
+  await key('A')
+  assert.match(d.message, /offline demo/)
+  d.demo = false
+  await key('A')
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  await key('A')
+  await key('\r')
+  await key('Bad name')
+  await key('\r')
+  assert.match(d.message, /App names/)
+  await key('A')
+  await key('\r')
+  await key('valid-name')
+  await key('\r')
+  await key('\r')
+  await key('wrong-name')
+  await key('\r')
+  assert.match(d.message, /did not match/)
+  await key('\r')
+  const app = d.app
+  await key('A')
+  assert.equal(d.app, app)
+  assert.equal(d.modal, null)
+  assert.equal(writes, 0)
+})
+
+test('Add App reports region lookup and partial creation errors without leaving the UI locked', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  demo.api.appRegions = async () => { throw new Error('Regions unavailable') }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('A')
+  assert.match(d.message, /Regions unavailable/)
+  assert.equal(d.busy, false)
+  assert.equal(d.modal, null)
+  d.api.appRegions = async () => [{name: 'us'}]
+  d.api.createPipelineApp = async () => { throw Object.assign(new Error('App partial-app was created, but attachment failed'), {createdApp: {id: 'partial-id', name: 'partial-app'}}) }
+  await key('A')
+  await key('\r')
+  await key('partial-app')
+  await key('\r')
+  await key('\r')
+  await key('partial-app')
+  await key('\r')
+  assert.match(d.message, /was created, but attachment failed/)
+  assert.ok(d.catalog.apps.some(app => app.id === 'partial-id'))
+  assert.equal(d.busy, false)
+  assert.equal(d.modal, null)
+})
+
+test('Add App locks its pipeline target during creation and handles refresh failures', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const creation = Promise.withResolvers()
+  demo.api.appRegions = async () => [{name: 'us'}]
+  demo.api.createPipelineApp = async () => creation.promise
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('A')
+  await key('\r')
+  await key('locked-app')
+  await key('\r')
+  await key('\r')
+  await key('locked-app')
+  await key('\r')
+  assert.equal(d.busy, true)
+  assert.ok(d.modal)
+  await key('a')
+  await key('\r')
+  assert.equal(d.app, null)
+  assert.equal(d.pipeline.id, demo.context.pipeline.id)
+  d.api.pipelineApps = async () => { throw new Error('Refresh failed') }
+  creation.resolve({id: 'locked-id', name: 'locked-app', stage: 'staging'})
+  await delay(20)
+  assert.match(d.message, /Created locked-app.*could not be refreshed/)
+  assert.equal(d.messageTone, 'warning')
+  assert.equal(d.busy, false)
+  assert.equal(d.modal, null)
+  assert.ok(d.catalog.apps.some(app => app.id === 'locked-id'))
 })
 
 test('automatic refresh waits while the terminal is unfocused and catches up once on focus', async t => {
