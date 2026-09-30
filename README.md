@@ -118,7 +118,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | --- | --- |
 | `t` / `p` / `a` | Browse teams / pipelines / apps |
 | `A` / `Shift-A` | Create a new app in the selected pipeline workspace |
-| `j` / `k`, `↑` / `↓` | Move selection, or scroll the focused details pane |
+| `j` / `k`, `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move selection down / up, or scroll the focused pane |
 | `Enter` | Open the selected item |
 | `Tab` / `Shift-Tab` | Focus the next / previous pane |
 | `/` | Filter sidebar names; submit an empty filter to clear |

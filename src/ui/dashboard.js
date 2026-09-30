@@ -24,6 +24,16 @@ const descriptionContent = (description, highlightFirstLine) => {
     : text
 }
 
+function bindMovementKeys(widget) {
+  for (const [key, direction] of [['C-n', 1], ['C-p', -1]]) {
+    widget.key([key], () => {
+      if (widget.type === 'list') widget.move(direction)
+      else widget.scroll(direction)
+      widget.screen.render()
+    })
+  }
+}
+
 function enableReadline(input, history, render) {
   let characters = [...input.getValue()]
   let cursor = characters.length
@@ -251,7 +261,9 @@ export class Dashboard {
     for (const list of [this.nav, this.main]) {
       list.key(['j'], () => { list.down(); this.render() })
       list.key(['k'], () => { list.up(); this.render() })
+      bindMovementKeys(list)
     }
+    bindMovementKeys(this.detail)
     const key = (keys, action) => this.screen.key(keys, (...args) => {
       if (!this.modal && !this.closed) action(...args)
     })
@@ -457,7 +469,7 @@ export class Dashboard {
   drawLanding() {
     this.summary.setContent(`${badge('heroku', 'Your Heroku workspace')}\n\n${paint('Browse teams, pipelines, and apps with t / p / a. Select an item and press Enter.', 'muted')}`)
     this.main.setLabel(` ${icons.heroku}  Welcome `)
-    this.setRows([{icon: 'pipelines', label: 'Choose a pipeline or app in the sidebar', detail: 'Navigation\n\nTab cycles between sidebar, list, and details.\nj/k or arrow keys move through lists.\n/ filters the sidebar.\n? displays all shortcuts.\n\nUse --app, --pipeline, --remote, or --team to choose a starting context.'}])
+    this.setRows([{icon: 'pipelines', label: 'Choose a pipeline or app in the sidebar', detail: 'Navigation\n\nTab cycles between sidebar, list, and details.\nj/k, Ctrl-N/Ctrl-P, or arrow keys move through lists.\n/ filters the sidebar.\n? displays all shortcuts.\n\nUse --app, --pipeline, --remote, or --team to choose a starting context.'}])
   }
 
   async openPipeline(pipeline) {
@@ -848,6 +860,7 @@ export class Dashboard {
         style: {fg: palette.fg, bg: palette.bg}})
       const list = blessed.list({parent: modal, top: 5, bottom: 2, left: 2, right: 2, ...frame(), keys: true, mouse: true,
         items: choices.map(choice => single(choice.label)), style: {...frame().style, selected: {fg: palette.bg, bg: palette.accent}}})
+      bindMovementKeys(list)
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('↑/↓', 'select')}   ${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}`, style: {bg: palette.bg}})
       let finished = false
       const finish = value => {
@@ -1175,6 +1188,7 @@ export class Dashboard {
       label: ` ${icons.code}  Heroku CLI · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
     const output = blessed.box({parent: modal, top: 1, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true,
       tags: false, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
+    bindMovementKeys(output)
     const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
       content: `${shortcut('Esc / q', 'close and stop')}   ${shortcut('j/k', 'scroll')}\n${paint('Running…', 'info')}`, style: {fg: palette.muted, bg: palette.bg}})
     const controller = new AbortController()
@@ -1239,8 +1253,9 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
+    bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
     modal.focus()
     this.render()
