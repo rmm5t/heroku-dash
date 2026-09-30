@@ -146,6 +146,7 @@ App actions:
 | `d` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
 | `D` | Settings | Add a custom domain and optionally enable SSL with ACM |
+| `y` | Settings | Copy the selected custom domain’s CNAME to the clipboard |
 | `x` | Settings | Remove the selected custom domain |
 | `:` | Any app view | Run a custom Heroku CLI command scoped to the current app |
 | `C` | Any app view | Open the default app console |

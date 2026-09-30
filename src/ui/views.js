@@ -160,7 +160,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
         detail += `${prefix}${displayed}\n`
       }
       const removable = domain.kind === 'custom'
-      detail += `\nClick the cyan Hostname or CNAME value to copy it.\n[D] add domain${removable ? '   [x] remove this domain' : ''}`
+      detail += `\nClick the cyan Hostname or CNAME value to copy it.\n[D] add domain${removable ? '   [y] copy CNAME   [x] remove this domain' : ''}`
       rows.push(row(`Domain  ${domain.hostname}${removable ? '    [x] remove' : ''}`, detail, {id: `domain:${domain.hostname}`, kind: 'domain', value: domain,
         copyRanges, icon: 'globe', tone: 'info', columns: ['Domain', domain.hostname, `${domain.status ?? '—'}${removable ? ' [x] remove' : ''}`]}))
     }

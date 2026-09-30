@@ -869,6 +869,29 @@ test('domain Hostname and CNAME values are cyan and clickable in read-only mode'
   assert.equal(copies.length, 2)
 })
 
+test('y copies the selected custom domain CNAME in read-only mode and ignores unavailable values', async t => {
+  const copies = []
+  const {dashboard: d, key} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  const original = d.api.appData.bind(d.api)
+  const domain = {hostname: 'www.example.com', cname: 'target.herokudns.com', kind: 'custom'}
+  d.api.appData = async id => ({...await original(id), domains: [domain]})
+  await key('\r')
+  await key('5')
+  await key('y') // Maintenance row.
+  assert.deepEqual(copies, [])
+  d.main.select(d.rows.findIndex(row => row.kind === 'domain'))
+  await key('y')
+  assert.deepEqual(copies, [domain.cname])
+  assert.equal(d.message, 'Copied CNAME to clipboard.')
+  domain.cname = null
+  await key('y')
+  assert.match(d.message, /CNAME is not available/)
+  domain.cname = 'built-in.example.com'
+  domain.kind = 'heroku'
+  await key('y')
+  assert.equal(copies.length, 1)
+})
+
 test('wrapped and scrolled domain fields copy the complete value after resizing', async t => {
   const copies = []
   const {dashboard: d, screen, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
