@@ -52,7 +52,7 @@ heroku dash --refresh 60               # Refresh the current app every minute
 heroku dash --refresh 0                # Manual refresh only
 ```
 
-`--app`, `--pipeline`, `--remote`, and `--team` are mutually exclusive. The default refresh interval is 30 seconds; nonzero intervals must be at least 10 seconds.
+`--app`, `--pipeline`, `--remote`, and `--team` are mutually exclusive. The default refresh interval is 60 seconds; nonzero intervals must be at least 10 seconds.
 
 ### Color themes
 

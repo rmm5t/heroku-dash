@@ -148,7 +148,7 @@ function enableReadline(input, history, render) {
 }
 
 export class Dashboard {
-  constructor({api, catalog, context, resources = null, refresh = 30, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
+  constructor({api, catalog, context, resources = null, refresh = 60, demo = false, theme = 'dark', screen, writeClipboard = clipboard.write,
     fetchMetrics = (data, options) => fetchTelemetry(api, data, options), executeHeroku = executeHerokuCommand,
     executeInteractiveHeroku = executeInteractiveHerokuCommand, appConfirm = new Map(), commandHistory = {entries: [], add() {}}, openURL = openExternalURL}) {
     setTheme(theme)

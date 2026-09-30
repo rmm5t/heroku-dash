@@ -22,7 +22,7 @@ export default class Dash extends Command {
     remote: Flags.string({char: 'r', description: 'Heroku Git remote to use', exclusive: ['app', 'pipeline', 'team']}),
     team: Flags.string({char: 't', description: 'Start in a team (name or ID)', exclusive: ['app', 'pipeline', 'remote']}),
     'read-only': Flags.boolean({description: 'Disable all remote changes', default: false}),
-    refresh: Flags.integer({description: 'Refresh current app every N seconds (0 disables)', default: 30, min: 0}),
+    refresh: Flags.integer({description: 'Refresh current app every N seconds (0 disables)', default: 60, min: 0}),
     demo: Flags.boolean({description: 'Explore an offline demo; no Heroku requests', default: false}),
     theme: Flags.string({description: 'Color theme (auto detects the terminal background)', options: ['auto', 'light', 'dark'], default: 'auto'}),
   }
