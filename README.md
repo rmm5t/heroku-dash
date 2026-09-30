@@ -144,7 +144,7 @@ App actions:
 | `Y` / `Shift-Y` | Config | Clone non-`HEROKU_*` config vars from another pipeline app into the current app, only when its Config is empty |
 | `e` | Config | Replace the selected variable's value |
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
-| `d` | Config | Delete the selected variable |
+| `x` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
 | `D` | Settings | Add a custom domain and optionally enable SSL with ACM |
 | `y` | Settings | Copy the selected custom domain’s CNAME to the clipboard |

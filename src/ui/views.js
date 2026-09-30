@@ -130,7 +130,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
       const prefix = `${single(key)}\n\n`
       const value = visible ? clean(config[key]) || '(empty value)' : 'Value hidden. Press v to reveal this variable.'
       rows.push(row(`${key} = ${visible ? single(config[key]) : '••••••••'}`,
-        `${prefix}${value}\n\n${visible ? 'Click the highlighted value to copy it.\n' : ''}[y] copy value   [v] reveal / hide (this variable)\n[e] replace value   [n] new variable   [d] delete\nConfig changes create a release and restart the app.`, {
+        `${prefix}${value}\n\n${visible ? 'Click the highlighted value to copy it.\n' : ''}[y] copy value   [v] reveal / hide (this variable)\n[e] replace value   [n] new variable   [x] delete\nConfig changes create a release and restart the app.`, {
           kind: 'config', key, icon: visible ? 'eye' : 'lock', tone: visible ? 'warning' : 'cyan', emphasis: key,
           valueRange: visible ? {start: prefix.length, end: prefix.length + value.length} : undefined,
         }))

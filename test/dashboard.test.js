@@ -1707,10 +1707,12 @@ test('config deletion and maintenance toggle target the confirmed app', async t 
   const writes = []
   demo.api.setConfig = async (...args) => { writes.push(['config', ...args]) }
   demo.api.maintenance = async (...args) => { writes.push(['maintenance', ...args]) }
-  const {key} = await harness(t, demo)
+  const {dashboard: d, key} = await harness(t, demo)
   await key('\r')
   await key('4')
   await key('d')
+  assert.ok(!d.modal)
+  await key('x')
   await key('constellation-staging')
   await key('\r')
   await key('5')
