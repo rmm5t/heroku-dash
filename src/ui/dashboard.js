@@ -302,7 +302,7 @@ export class Dashboard {
       }
     })
     key(['s'], () => void this.scale())
-    key(['x'], () => void this.dynoAction('stop'))
+    key(['x'], () => void (TABS[this.tab] === 'Settings' ? this.removeDomain() : this.dynoAction('stop')))
     key(['r'], () => void this.dynoAction('restart'))
     key(['y'], () => void this.copyConfig())
     key(['e'], () => void this.editConfig(false))
@@ -1248,6 +1248,24 @@ export class Dashboard {
     })
   }
 
+  async removeDomain() {
+    if (TABS[this.tab] !== 'Settings' || !this.writable()) return
+    if (this.demo) { this.setStatus('Domain removal is disabled in the offline demo.', 'warning'); return }
+    const row = this.rows[this.main.selected]
+    if (row?.kind !== 'domain' || row.value.kind !== 'custom') {
+      this.setStatus('Select a custom domain to remove. The default Heroku domain cannot be removed.', 'warning')
+      return
+    }
+    const app = this.app
+    const domain = row.value
+    const generation = this.generation
+    const confirmation = await this.confirm(app, `Remove domain ${domain.hostname}\nThis app will stop serving requests for this hostname.`, {highlightFirstLine: true})
+    if (!confirmation || this.closed || generation !== this.generation || this.app?.id !== app.id) return
+    await this.mutate(() => this.api.removeDomain(app.name, domain, confirmation), {
+      successMessage: `Removed ${domain.hostname}. Settings refreshed.`,
+    })
+  }
+
   async customCommand(initialCommand) {
     if (!this.app || this.busy) return
     if (this.demo) { this.setStatus('Heroku commands are disabled in the offline demo.', 'warning'); return }
@@ -1388,7 +1406,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process in Resources / remove domain in Settings\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })

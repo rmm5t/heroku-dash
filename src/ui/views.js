@@ -159,9 +159,10 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
         }
         detail += `${prefix}${displayed}\n`
       }
-      detail += '\nClick the cyan Hostname or CNAME value to copy it.\n[D] add domain'
-      rows.push(row(`Domain  ${domain.hostname}`, detail, {id: `domain:${domain.hostname}`, kind: 'domain', value: domain,
-        copyRanges, icon: 'globe', tone: 'info', columns: ['Domain', domain.hostname, domain.status]}))
+      const removable = domain.kind === 'custom'
+      detail += `\nClick the cyan Hostname or CNAME value to copy it.\n[D] add domain${removable ? '   [x] remove this domain' : ''}`
+      rows.push(row(`Domain  ${domain.hostname}${removable ? '    [x] remove' : ''}`, detail, {id: `domain:${domain.hostname}`, kind: 'domain', value: domain,
+        copyRanges, icon: 'globe', tone: 'info', columns: ['Domain', domain.hostname, `${domain.status ?? '—'}${removable ? ' [x] remove' : ''}`]}))
     }
     for (const item of buildpacks) rows.push(row(`Buildpack  ${item.ordinal}. ${item.buildpack?.name ?? item.buildpack?.url}`, lines([
       ['Buildpack', item.buildpack?.name], ['Order', item.ordinal], ['URL', item.buildpack?.url],

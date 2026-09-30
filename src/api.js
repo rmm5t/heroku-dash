@@ -235,6 +235,13 @@ export class HerokuAPI {
     return domain
   }
 
+  async removeDomain(app, domain, confirmation) {
+    this.confirm(app, confirmation)
+    if (domain?.kind !== 'custom') throw new Error('Only custom domains can be removed.')
+    const hostname = normalizeHostname(domain.hostname)
+    return this.get(`/apps/${encode(app)}/domains/${encode(domain.id || hostname)}`, {method: 'DELETE'})
+  }
+
   confirm(app, confirmation) {
     if (this.readOnly) throw new Error('Read-only mode: remote changes are disabled.')
     if (!app || confirmation !== app) throw new Error('Type the exact app name to confirm this change.')

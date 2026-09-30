@@ -30,6 +30,7 @@ test('read-only mode rejects every write before transport', async () => {
   await assert.rejects(api.createPipelineApp({name: 'new-app'}, 'new-app'), /Read-only/)
   await assert.rejects(api.promotePipelineApp({source: {name: 'source-app'}}, 'source-app'), /Read-only/)
   await assert.rejects(api.addDomain('app', 'www.example.com', true, 'app'), /Read-only/)
+  await assert.rejects(api.removeDomain('app', {kind: 'custom', hostname: 'www.example.com'}, 'app'), /Read-only/)
   for (const method of ['PATCH', 'POST', 'DELETE', 'PUT', 'patch']) await assert.rejects(api.request('/apps/app', {method}), /Read-only/)
   assert.equal(calls, 0)
 })
@@ -217,6 +218,23 @@ test('ACM failure reports that the domain was added and preserves the new domain
     assert.match(error.message, /was added, but enabling ACM failed: ACM unavailable/)
     return true
   })
+})
+
+test('domain removal requires exact confirmation and rejects built-in domains before transport', async () => {
+  const api = new HerokuAPI({request() { assert.fail('Invalid removal reached transport') }})
+  await assert.rejects(api.removeDomain('app', {kind: 'custom', hostname: 'www.example.com'}, 'other-app'), /exact app name/)
+  await assert.rejects(api.removeDomain('app', {kind: 'heroku', hostname: 'app.herokuapp.com'}, 'app'), /Only custom domains/)
+  await assert.rejects(api.removeDomain('app', null, 'app'), /Only custom domains/)
+})
+
+test('domain removal scopes the DELETE to the confirmed app and selected domain', async () => {
+  const calls = []
+  const api = new HerokuAPI({async request(path, options) { calls.push({path, ...options}); return {body: {}} }})
+  await api.removeDomain('app', {kind: 'custom', id: 'domain-id', hostname: 'www.example.com'}, 'app')
+  await api.removeDomain('app', {kind: 'custom', hostname: '*.example.com'}, 'app')
+  assert.deepEqual(calls.map(({path, method}) => [method, path]), [
+    ['DELETE', '/apps/app/domains/domain-id'], ['DELETE', '/apps/app/domains/*.example.com'],
+  ])
 })
 
 test('app sections fail independently and config is fetched lazily', async () => {

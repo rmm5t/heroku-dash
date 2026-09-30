@@ -108,7 +108,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale or stop processes and restart processes or dynos; optionally view costs and CPU/RAM allocations |
 | **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments; optionally view billed costs and capacity limits |
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
-| **5 Settings** | Add domains with optional ACM; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |
+| **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, including status, author, description, and timestamp |
 | **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and two-hour sparklines, alongside dyno health and recent deployment outcomes |
 
@@ -146,6 +146,7 @@ App actions:
 | `d` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
 | `D` | Settings | Add a custom domain and optionally enable SSL with ACM |
+| `x` | Settings | Remove the selected custom domain |
 | `:` | Any app view | Run a custom Heroku CLI command scoped to the current app |
 | `C` | Any app view | Open the default app console |
 
@@ -160,6 +161,8 @@ Press **`P`** on a selected pipeline app or from an app view to promote its late
 Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Pressing `x` on a process scales it to zero; use `s` to scale it back up. Individual dynos can be restarted but not stopped through the dashboard because Heroku automatically replaces stopped formation dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
 
 In **5 Settings**, press **`D`** (`Shift-D`) to add a custom domain. Enter the hostname, choose whether to enable app-wide Automatic Certificate Management (ACM) if it is currently disabled, then confirm with the exact app name. Configure DNS using the new domain’s CNAME; certificate issuance depends on correct DNS configuration. The Details pane highlights available **Hostname** and **CNAME** values in cyan—click either value to copy it, including wrapped portions. Domain copying also works in read-only mode. If the domain is created but enabling ACM fails, the domain remains added and the status explains the failure.
+
+To remove a custom domain, select its Settings row and press **`x`**, then type the exact app name to confirm. The default Heroku domain cannot be removed. Settings refreshes after removal.
 
 Press **`:`** while viewing an app to enter a Heroku CLI command without the leading `heroku`. Command and exact-app confirmation fields support readline-style editing, including `Ctrl-A` / `Ctrl-E`, `Ctrl-B` / `Ctrl-F`, `Ctrl-T`, `Ctrl-U` / `Ctrl-K`, `Ctrl-W` / `Ctrl-Y`, and `Alt-B` / `Alt-F` / `Alt-D`. Press `↑` / `↓` or `Ctrl-P` / `Ctrl-N` in the command field to browse commands previously run from any app. Dash keeps the newest 100 commands in the Heroku CLI config directory (`~/.config/heroku/dash/command-history.json` on standard Unix setups) with user-only file permissions; delete that file to clear the history. Dash rejects `-a` / `--app` and `-r` / `--remote`, then adds `--app` with the exact current app before executing. The command runs without a shell and shows **Continue (y)** and **Cancel (n)** buttons because custom commands can modify remote resources. Press `y` or `n` to choose immediately, or use `←` / `→` and `Enter`; Continue is selected initially. For installed commands whose metadata identifies `--confirm` as an app-name check, Dash supplies the current app and requires typing that exact app name once instead. Other `--confirm` flags can target resources such as databases, so they are never inferred. Output streams into a scrollable floating pane with ANSI colors and text styles preserved; unsafe terminal controls are removed. `Esc` or `q` closes the pane and stops a running command.
 

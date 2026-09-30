@@ -965,6 +965,59 @@ test('Settings domain creation supports cancellation, validation, and reports pa
   assert.equal(d.modal, null)
 })
 
+test('x removes the selected custom domain in Settings after exact-app confirmation', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const original = demo.api.appData.bind(demo.api)
+  const domain = {id: 'domain-id', hostname: 'www.example.com', kind: 'custom', cname: 'target.herokudns.com'}
+  const writes = []
+  demo.api.appData = async id => ({...await original(id), domains: writes.length ? [] : [domain]})
+  demo.api.removeDomain = async (...args) => { writes.push(args) }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('\r')
+  await key('5')
+  d.main.select(d.rows.findIndex(row => row.kind === 'domain'))
+  await key('x')
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Remove domain www.example.com/)
+  assert.equal(writes.length, 0)
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [['constellation-staging', domain, 'constellation-staging']])
+  assert.ok(!d.rows.some(row => row.kind === 'domain' && row.value.hostname === domain.hostname))
+  assert.equal(d.message, 'Removed www.example.com. Settings refreshed.')
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+})
+
+test('domain removal rejects non-custom rows, read-only/demo modes, cancellation, and wrong confirmation', async t => {
+  const {dashboard: d, key} = await harness(t)
+  let writes = 0
+  d.api.removeDomain = async () => { writes++; assert.fail('Unconfirmed removal') }
+  await key('\r')
+  await key('5')
+  await key('x')
+  assert.match(d.message, /Read-only/)
+  d.api.readOnly = false
+  d.demo = true
+  await key('x')
+  assert.match(d.message, /offline demo/)
+  d.demo = false
+  await key('x')
+  assert.match(d.message, /Select a custom domain/)
+  d.main.select(d.rows.findIndex(row => row.kind === 'domain'))
+  await key('x')
+  assert.match(d.message, /default Heroku domain cannot be removed/)
+  d.rows[d.main.selected].value = {kind: 'custom', hostname: 'www.example.com', id: 'domain-id'}
+  await key('x')
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  await key('x')
+  await key('wrong-app')
+  await key('\r')
+  assert.match(d.message, /did not match/)
+  assert.equal(writes, 0)
+})
+
 test('y only copies an available config row and remains text inside prompts', async t => {
   const {dashboard: d, key} = await harness(t, {writeClipboard: async () => assert.fail('No config value should be copied')})
   await key('y') // Pipeline overview.

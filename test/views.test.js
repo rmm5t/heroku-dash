@@ -36,8 +36,11 @@ test('Settings domain rows identify copyable Hostname and CNAME values and retai
     ['Hostname', 'www.example.com', 'www.example.com'], ['CNAME', 'target.herokudns.com', 'target.herokudns.com'],
   ])
   assert.match(domain.detail, /ACM status\s+pending/)
+  assert.match(domain.detail, /\[x\] remove this domain/)
   data.domains[0].cname = null
   assert.deepEqual(appRows('Settings', data).find(row => row.kind === 'domain').copyRanges.map(range => range.label), ['Hostname'])
+  data.domains[0].kind = 'heroku'
+  assert.ok(!appRows('Settings', data).find(row => row.kind === 'domain').detail.includes('[x]'))
 })
 
 test('metrics columns show unavailable dyno counts as unknown rather than zero', async () => {
