@@ -8,7 +8,7 @@ export function telemetryRows(data, state = {}) {
   const snapshot = state.snapshot
   const windowLabel = metricsTimeframe(snapshot?.windowHours ?? state.windowHours ?? 2).label
   const rows = []
-  const add = ({id, title, scope, metric, values = [], unit = '', errorKey, note, reference, extra = () => []}) => {
+  const add = ({id, title, scope, processType, metric, values = [], unit = '', errorKey, note, reference, extra = () => []}) => {
     const stats = summarizeSeries(metric, values)
     const error = state.error ?? snapshot?.errors[errorKey]
     const stale = stats.time !== null && Date.now() - (stats.time + metric.stepMinutes * 60_000) > metric.stepMinutes * 120_000
@@ -34,7 +34,7 @@ export function telemetryRows(data, state = {}) {
       ...(snapshot ? [field('Fetched', snapshot.fetchedAt)] : []),
       '', note,
     ].join('\n')
-    rows.push({id: `telemetry:${id}`, label: single(`${title} · ${scope} · ${format(stats.latest, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
+    rows.push({id: `telemetry:${id}`, processType, label: single(`${title} · ${scope} · ${format(stats.latest, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
       metricChart: {title, scope, metric, values, unit, stats, reference, windowLabel, state: status ?? 'Recent', details: clean(facts)},
       icon: title.startsWith('Latency') ? 'clock' : 'metrics', tone: status === 'Stale' ? 'warning' : error ? 'error' : status ? 'muted' : 'info',
       columns: [title, scope, format(stats.latest, unit, true), status ?? sparkline(values, 12)], emphasis: status,
@@ -66,7 +66,7 @@ export function telemetryRows(data, state = {}) {
   for (const process of metricProcesses(data)) {
     const memory = snapshot?.processes[process.type]?.memory
     const usage = memoryUsage(memory)
-    add({id: `memory:${process.type}`, title: 'Memory', scope: process.type, metric: memory, values: usage.values, unit: 'bytes', errorKey: `${process.type}.memory`,
+    add({id: `memory:${process.type}`, title: 'Memory', scope: process.type, processType: process.type, metric: memory, values: usage.values, unit: 'bytes', errorKey: `${process.type}.memory`,
       reference: {label: 'Quota (max)', values: memory?.series['memory.quota.bytes.max'], tone: 'warning', limit: true},
       note: `Series: ${usage.key}\nMean usage is aggregated by process type, not summed across replicas.\nQuota and maxima refer to the same bucket as the displayed usage.`,
       extra: stats => {
@@ -80,7 +80,7 @@ export function telemetryRows(data, state = {}) {
       },
     })
     const load = snapshot?.processes[process.type]?.load
-    add({id: `load:${process.type}`, title: 'Dyno load', scope: process.type, metric: load,
+    add({id: `load:${process.type}`, title: 'Dyno load', scope: process.type, processType: process.type, metric: load,
       values: load?.series['load.avg.1m.mean'], errorKey: `${process.type}.load`,
       reference: {label: 'Bucket max', values: load?.series['load.avg.1m.max'], tone: 'muted'},
       note: 'Mean one-minute load average for this process type: runnable CPU tasks.\nThis is not CPU utilization percent or the number of queued HTTP requests.\nCedar load averages are distinct from Fir CPU usage.',

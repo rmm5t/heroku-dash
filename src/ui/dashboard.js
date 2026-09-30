@@ -1477,8 +1477,9 @@ export class Dashboard {
       && this.app?.id === app?.id && (!addon || this.rows[this.main.selected]?.value?.id === addon.id)
     let url
     if (app && !addon) {
-      const path = ['activity', 'resources', 'resources', 'settings', 'settings', 'activity', 'metrics'][this.tab]
-      url = `https://dashboard.heroku.com/apps/${encodeURIComponent(app.name)}/${path}`
+      const path = ['activity', 'resources', 'resources', 'settings', 'settings', 'activity', 'metrics'][tab]
+      const processType = TABS[tab] === 'Metrics' ? row?.processType : null
+      url = `https://dashboard.heroku.com/apps/${encodeURIComponent(app.name)}/${path}${processType ? `/${encodeURIComponent(processType)}` : ''}`
     } else if (this.pipeline) url = `https://dashboard.heroku.com/pipelines/${encodeURIComponent(this.pipeline.id)}`
     else if (this.team) url = `https://dashboard.heroku.com/teams/${encodeURIComponent(this.team.name)}/apps`
     else url = 'https://dashboard.heroku.com/apps'

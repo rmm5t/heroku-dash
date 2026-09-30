@@ -195,7 +195,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
       const detail = lines([['Process', f.type], ['Desired', f.quantity], ['Running', errors.dynos ? 'Unavailable' : running]])
         + '\n\n' + (errors.dynos ? `Dyno data unavailable: ${errors.dynos}` : members.map(d => `${d.name.padEnd(22)} ${d.state.padEnd(10)} age ${age(d.created_at)}`).join('\n') || 'No dynos currently running.')
       rows.push(row(`${f.type}  ·  desired ${f.quantity}  ·  running ${running}`, detail,
-        {id: `health:${f.type}`, icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
+        {id: `health:${f.type}`, processType: f.type, icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
           columns: [f.type, f.quantity, errors.dynos ? '—' : running, status]}))
     }
     if (!errors.releases) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,

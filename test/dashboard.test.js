@@ -150,6 +150,39 @@ test('o reports unavailable add-on links and browser errors without opening a ge
   assert.equal(d.loadingTimer, null)
 })
 
+test('o in Metrics opens the selected process metrics, with app-wide rows using the generic page', async t => {
+  const opened = []
+  const {dashboard: d, key} = await harness(t, {openURL: async url => { opened.push(url) }})
+  await key('\r')
+  await key('7')
+  assert.equal(d.api.readOnly, true)
+  const cases = [
+    ['telemetry:memory:web', 'metrics/web'],
+    ['telemetry:memory:worker', 'metrics/worker'],
+    ['telemetry:load:web', 'metrics/web'],
+    ['telemetry:load:worker', 'metrics/worker'],
+    ['health:web', 'metrics/web'],
+    ['health:worker', 'metrics/worker'],
+    ['telemetry:throughput', 'metrics'],
+    ['telemetry:latency:p50', 'metrics'],
+    ['telemetry:latency:p95', 'metrics'],
+    ['telemetry:latency:p99', 'metrics'],
+    ['health', 'metrics'],
+    ['releases', 'metrics'],
+    ['snapshot', 'metrics'],
+  ]
+  for (const [id, path] of cases) {
+    const index = d.rows.findIndex(row => row.id === id)
+    assert.ok(index >= 0, `Metrics row ${id} must be available`)
+    d.main.select(index)
+    await key('o')
+    assert.equal(opened.at(-1), `https://dashboard.heroku.com/apps/constellation-staging/${path}`)
+  }
+  assert.equal(opened.length, cases.length)
+  assert.equal(d.openingBrowser, false)
+  assert.equal(d.loadingTimer, null)
+})
+
 test('o retains app and pipeline browser navigation and is disabled in the offline demo', async t => {
   const opened = []
   const {dashboard: d, key} = await harness(t, {openURL: async url => { opened.push(url) }})

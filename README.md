@@ -130,7 +130,7 @@ In **3 Add-ons**, select an add-on and press **`o`** to open its specific manage
 | `h` / `l`, `[` / `]`, `←` / `→` | Previous / next app view |
 | `R` / `g` | Refresh the current app, pipeline, or workspace catalog |
 | `Ctrl-L` | Redraw the terminal |
-| `o` | Open the corresponding Heroku web page; in Add-ons, open the selected add-on’s management dashboard |
+| `o` | Open the corresponding Heroku web page; in Add-ons, open the selected add-on’s management dashboard; in Metrics, open the selected process’s metrics |
 | `?` | Show keyboard help |
 | `q` / `Ctrl-C` | Quit (`q` closes help; `Ctrl-C` also exits from input prompts) |
 
@@ -230,7 +230,9 @@ Metrics load on opening the tab and refresh with the current app while the tab i
 - Statistics are computed over observed buckets. A mean of bucket p95 values is **not** the p95 of all requests over the entire window.
 - Memory is aggregated by process type, not summed across replicas. Memory quota is a capacity limit; it isn't used as a substitute for measured usage.
 
-Availability depends on app permissions, dyno tier, generation, and metric collection. Eco does not provide application metrics. Cedar dyno-load averages differ from Fir CPU usage; this version does not request a separate Fir CPU-utilization series. Endpoint failures appear alongside working metrics, and **`o`** opens the web metrics dashboard.
+Availability depends on app permissions, dyno tier, generation, and metric collection. Eco does not provide application metrics. Cedar dyno-load averages differ from Fir CPU usage; this version does not request a separate Fir CPU-utilization series. Endpoint failures appear alongside working metrics.
+
+Press **`o`** on a memory, dyno-load, or process-health row to open that process type’s web metrics page (for example, `web` or `worker`). Throughput, latency, and app-wide summary rows open the app’s general metrics dashboard.
 
 Platform snapshots remain below the performance rows: configured/healthy dyno counts, process state, and recent releases. `up` and `idle` formation dynos count as healthy, and one-off processes are excluded from formation health. During deploys, overlapping dynos can exceed the desired count.
 
