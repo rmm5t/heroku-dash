@@ -49,6 +49,13 @@ export const TABLE_COLUMNS = {
     {label: 'Value', min: 16, weight: 4},
     {label: 'Status / Action', width: 16},
   ],
+  Releases: [
+    {label: 'Version', width: 7},
+    {label: 'Status', width: 10},
+    {label: 'Age', width: 8, hideBelow: 72},
+    {label: 'User', min: 16, weight: 1, max: 36},
+    {label: 'Description', min: 12, weight: 2},
+  ],
   Metrics: [
     {label: 'Metric / Process', compact: 'Metric', min: 14, weight: 3},
     {label: 'Scope / Limit', compact: 'Scope/Limit', min: 11, weight: 1, max: 18},

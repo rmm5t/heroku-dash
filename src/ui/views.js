@@ -171,10 +171,11 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
   }
   if (tab === 'Releases') {
     error('releases')
-    for (const release of releases) rows.push(row(`v${String(release.version).padEnd(5)} ${release.status.padEnd(10)} ${age(release.created_at).padEnd(7)} ${release.description}`, lines([
+    for (const release of releases) rows.push(row(`v${String(release.version).padEnd(5)} ${release.status.padEnd(10)} ${age(release.created_at).padEnd(7)} ${single(release.user?.email)} ${release.description}`, lines([
       ['Version', `v${release.version}`], ['Status', release.status], ['Description', release.description],
       ['User', release.user?.email], ['Created', release.created_at], ['ID', release.id],
-    ]), {...stateStyle(release.status), emphasis: release.status}))
+    ]), {...stateStyle(release.status), emphasis: release.status,
+      columns: [`v${release.version}`, release.status, age(release.created_at), release.user?.email ?? '—', release.description]}))
   }
   if (tab === 'Metrics') {
     rows.push(...telemetryRows(data, metrics))
