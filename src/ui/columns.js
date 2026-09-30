@@ -45,9 +45,9 @@ export const TABLE_COLUMNS = {
     {label: 'State', width: 19},
   ],
   Settings: [
-    {label: 'Setting / Type', min: 14, weight: 1, max: 24},
+    {label: 'Setting / Type', width: 14},
     {label: 'Value', min: 16, weight: 4},
-    {label: 'Status / Action', width: 16},
+    {label: 'Status / Action', width: 22},
   ],
   Releases: [
     {label: 'Version', width: 7},
