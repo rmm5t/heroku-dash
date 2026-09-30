@@ -54,6 +54,23 @@ heroku dash --refresh 0                # Manual refresh only
 
 `--app`, `--pipeline`, `--remote`, and `--team` are mutually exclusive. The default refresh interval is 60 seconds; nonzero intervals must be at least 10 seconds.
 
+You can also set defaults with environment variables:
+
+| Environment variable | Equivalent option |
+| --- | --- |
+| `HEROKU_DASH_TEAM` | `--team` |
+| `HEROKU_DASH_PIPELINE` | `--pipeline` |
+| `HEROKU_DASH_REFRESH` | `--refresh` |
+
+Explicit command-line options take precedence. Any explicit `--app`, `--pipeline`, `--remote`, or `--team` replaces environment-based context choices. Without an explicit context option, `HEROKU_DASH_TEAM` and `HEROKU_DASH_PIPELINE` are mutually exclusive, just like their CLI options. Refresh values use the same validation as `--refresh`, including `0` to disable automatic refresh. Empty environment variables are ignored.
+
+```sh
+export HEROKU_DASH_TEAM=my-team
+export HEROKU_DASH_REFRESH=120
+heroku dash                            # Browse my-team; refresh every two minutes
+heroku dash --pipeline other-pipeline --refresh 60
+```
+
 ### Color themes
 
 Dash automatically chooses a **light or dark theme** from your terminal's background color at startup. It queries the terminal using OSC 11, waits up to 200 ms, and falls back to `COLORFGBG` when available. If the background cannot be determined, it uses the dark theme.

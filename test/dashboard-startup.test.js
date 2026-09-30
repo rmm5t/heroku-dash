@@ -10,6 +10,22 @@ import {runDashboard} from '../src/ui/dashboard.js'
 import {palettes} from '../src/ui/theme.js'
 import {ThemeInput} from '../src/ui/terminal-theme.js'
 
+function dashEnvironment(t, values = {}) {
+  const names = ['HEROKU_DASH_TEAM', 'HEROKU_DASH_PIPELINE', 'HEROKU_DASH_REFRESH']
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]))
+  const apply = values => {
+    for (const name of names) {
+      if (values[name] === undefined) delete process.env[name]
+      else process.env[name] = values[name]
+    }
+  }
+  apply(values)
+  t.after(() => apply(previous))
+  return apply
+}
+
+const parseOptions = argv => new Dash(argv, {bin: 'heroku', runHook: async () => ({successes: []})}).parseOptions()
+
 function terminal(t, response) {
   const source = new PassThrough()
   Object.assign(source, {isTTY: true, isRaw: false, setRawMode(value) { this.isRaw = value }})
@@ -35,13 +51,76 @@ function terminal(t, response) {
   return {source, input, screen, writes, queried: queried.promise, ready: ready.promise}
 }
 
-test('theme flag defaults to auto and validates explicit overrides', async () => {
+test('theme flag defaults to auto and validates explicit overrides', async t => {
+  dashEnvironment(t)
   for (const theme of ['auto', 'light', 'dark']) {
     const args = theme === 'auto' ? [] : ['--theme', theme]
     const {flags} = await Parser.parse(args, {flags: Dash.flags})
     assert.equal(flags.theme, theme)
   }
   await assert.rejects(Parser.parse(['--theme', 'invalid'], {flags: Dash.flags}))
+})
+
+test('Dash environment variables supply team, pipeline, and refresh options', async t => {
+  const setEnv = dashEnvironment(t, {HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_REFRESH: '120'})
+  const teamFlags = (await parseOptions([])).flags
+  assert.equal(teamFlags.team, 'env-team')
+  assert.equal(teamFlags.pipeline, undefined)
+  assert.equal(teamFlags.refresh, 120)
+  setEnv({HEROKU_DASH_PIPELINE: 'env-pipeline', HEROKU_DASH_REFRESH: '0'})
+  const pipelineFlags = (await parseOptions([])).flags
+  assert.equal(pipelineFlags.pipeline, 'env-pipeline')
+  assert.equal(pipelineFlags.team, undefined)
+  assert.equal(pipelineFlags.refresh, 0)
+})
+
+test('explicit context options override all environment context choices, including short and attached flags', async t => {
+  dashEnvironment(t, {HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_PIPELINE: 'env-pipeline', HEROKU_DASH_REFRESH: '120'})
+  for (const [argv, name, value] of [
+    [['--team', 'cli-team'], 'team', 'cli-team'],
+    [['-tcli-team'], 'team', 'cli-team'],
+    [['--pipeline=cli-pipeline'], 'pipeline', 'cli-pipeline'],
+    [['-p', 'cli-pipeline'], 'pipeline', 'cli-pipeline'],
+    [['--app', 'cli-app'], 'app', 'cli-app'],
+    [['-acli-app'], 'app', 'cli-app'],
+    [['--remote=staging'], 'remote', 'staging'],
+    [['-r', 'staging'], 'remote', 'staging'],
+  ]) {
+    const {flags} = await parseOptions(argv)
+    for (const context of ['app', 'pipeline', 'remote', 'team']) assert.equal(flags[context], context === name ? value : undefined)
+    assert.equal(flags.refresh, 120)
+  }
+  assert.equal(process.env.HEROKU_DASH_TEAM, 'env-team')
+  assert.equal(process.env.HEROKU_DASH_PIPELINE, 'env-pipeline')
+})
+
+test('explicit refresh options override environment values, including zero and invalid defaults', async t => {
+  const setEnv = dashEnvironment(t, {HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_REFRESH: '120'})
+  assert.equal((await parseOptions(['--refresh', '0'])).flags.refresh, 0)
+  assert.equal((await parseOptions(['--refresh=90'])).flags.refresh, 90)
+  setEnv({HEROKU_DASH_REFRESH: 'not-an-integer'})
+  assert.equal((await parseOptions(['--refresh', '60'])).flags.refresh, 60)
+})
+
+test('environment options retain integer, interval, and context exclusivity validation', async t => {
+  const setEnv = dashEnvironment(t)
+  for (const value of ['not-an-integer', '1.5', '-1', '5']) {
+    setEnv({HEROKU_DASH_REFRESH: value})
+    await assert.rejects(parseOptions([]), /refresh|integer/i)
+  }
+  setEnv({HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_PIPELINE: 'env-pipeline'})
+  await assert.rejects(parseOptions([]), /cannot also be provided/)
+  await assert.rejects(parseOptions(['--team', 'cli-team', '--pipeline', 'cli-pipeline']), /cannot also be provided/)
+})
+
+test('unset or empty Dash environment variables retain built-in defaults', async t => {
+  const setEnv = dashEnvironment(t)
+  assert.equal((await parseOptions([])).flags.refresh, 60)
+  setEnv({HEROKU_DASH_TEAM: '', HEROKU_DASH_PIPELINE: '', HEROKU_DASH_REFRESH: ''})
+  const {flags} = await parseOptions([])
+  assert.equal(flags.team, undefined)
+  assert.equal(flags.pipeline, undefined)
+  assert.equal(flags.refresh, 60)
 })
 
 test('startup detects a light terminal before rendering and restores raw mode on exit', {timeout: 2000}, async t => {

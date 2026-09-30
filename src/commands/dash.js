@@ -18,19 +18,31 @@ export default class Dash extends Command {
   ]
   static flags = {
     app: Flags.string({char: 'a', description: 'App name or ID', exclusive: ['pipeline', 'remote', 'team']}),
-    pipeline: Flags.string({char: 'p', description: 'Pipeline name or ID', exclusive: ['app', 'remote', 'team']}),
+    pipeline: Flags.string({char: 'p', description: 'Pipeline name or ID', env: 'HEROKU_DASH_PIPELINE', exclusive: ['app', 'remote', 'team']}),
     remote: Flags.string({char: 'r', description: 'Heroku Git remote to use', exclusive: ['app', 'pipeline', 'team']}),
-    team: Flags.string({char: 't', description: 'Start in a team (name or ID)', exclusive: ['app', 'pipeline', 'remote']}),
+    team: Flags.string({char: 't', description: 'Start in a team (name or ID)', env: 'HEROKU_DASH_TEAM', exclusive: ['app', 'pipeline', 'remote']}),
     'read-only': Flags.boolean({description: 'Disable all remote changes', default: false}),
-    refresh: Flags.integer({description: 'Refresh current app every N seconds (0 disables)', default: 60, min: 0}),
+    refresh: Flags.integer({description: 'Refresh current app every N seconds (0 disables)', env: 'HEROKU_DASH_REFRESH', default: 60, min: 0}),
     demo: Flags.boolean({description: 'Explore an offline demo; no Heroku requests', default: false}),
     theme: Flags.string({description: 'Color theme (auto detects the terminal background)', options: ['auto', 'light', 'dark'], default: 'auto'}),
   }
 
+  async parseOptions() {
+    // Explicit context flags take precedence over mutually exclusive env defaults.
+    const cliOptions = {...Dash, flags: {...Dash.flags,
+      pipeline: {...Dash.flags.pipeline, env: undefined},
+      team: {...Dash.flags.team, env: undefined},
+    }}
+    let parsed = await this.parse(cliOptions)
+    const explicitContext = ['app', 'pipeline', 'remote', 'team'].some(name => parsed.flags[name] !== undefined)
+    if (!explicitContext && (process.env.HEROKU_DASH_PIPELINE || process.env.HEROKU_DASH_TEAM)) parsed = await this.parse(Dash)
+    if (parsed.flags.refresh !== 0 && parsed.flags.refresh < 10) this.error('--refresh must be 0 or at least 10 seconds.')
+    return parsed
+  }
+
   async run() {
-    const {flags} = await this.parse(Dash)
+    const {flags} = await this.parseOptions()
     if (!process.stdin.isTTY || !process.stdout.isTTY) this.error('heroku dash needs an interactive terminal (TTY). Run it directly in your terminal.')
-    if (flags.refresh !== 0 && flags.refresh < 10) this.error('--refresh must be 0 or at least 10 seconds.')
     const {runDashboard} = await import('../ui/dashboard.js')
     if (flags.demo) {
       const {createDemo} = await import('../demo.js')
