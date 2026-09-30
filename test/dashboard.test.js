@@ -839,6 +839,132 @@ test('empty values and wide characters are clickable without including trailing 
   assert.equal(copies.length, 2)
 })
 
+test('domain Hostname and CNAME values are cyan and clickable in read-only mode', async t => {
+  const copies = []
+  const {dashboard: d, screen, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  const original = d.api.appData.bind(d.api)
+  const domain = {hostname: 'www.example.com', cname: 'target.herokudns.com', kind: 'custom', status: 'succeeded'}
+  d.api.appData = async id => ({...await original(id), domains: [domain]})
+  await key('\r')
+  await key('5')
+  d.main.select(d.rows.findIndex(row => row.kind === 'domain'))
+  d.render()
+  const x = d.detail.lpos.xi + d.detail.ileft
+  const top = d.detail.lpos.yi + d.detail.itop
+  assert.equal((screen.lines[top][x + 18][0] >> 9) & 0x1ff, blessed.colors.convert(palette.cyan))
+  assert.equal((screen.lines[top + 2][x + 18][0] >> 9) & 0x1ff, blessed.colors.convert(palette.cyan))
+  assert.notEqual((screen.lines[top][x][0] >> 9) & 0x1ff, blessed.colors.convert(palette.cyan))
+  await click(x + 19, top)
+  await click(x + 19, top + 2)
+  assert.deepEqual(copies, [domain.hostname, domain.cname])
+  assert.equal(d.message, 'Copied CNAME to clipboard.')
+  await click(x, top)
+  await click(x + 18 + domain.hostname.length, top)
+  await click(x + 19, top + 1)
+  await click(x + 19, top + 2, 'right')
+  await click(d.detail.lpos.xl - d.detail.iright - 1, top)
+  assert.equal(copies.length, 2)
+  await key('?')
+  await click(x + 19, top)
+  assert.equal(copies.length, 2)
+})
+
+test('wrapped and scrolled domain fields copy the complete value after resizing', async t => {
+  const copies = []
+  const {dashboard: d, screen, key, click} = await harness(t, {writeClipboard: async value => { copies.push(value) }})
+  const original = d.api.appData.bind(d.api)
+  const hostname = `${'host-label.'.repeat(18)}example.com`
+  const cname = `${'target-label.'.repeat(16)}herokudns.com`
+  d.api.appData = async id => ({...await original(id), domains: [{hostname, cname, kind: 'custom', acm_status_reason: 'ACM status detail '.repeat(150)}]})
+  await key('\r')
+  await key('5')
+  d.main.select(d.rows.findIndex(row => row.kind === 'domain'))
+  for (const width of [140, 90]) {
+    screen.program.cols = width
+    screen.program.emit('resize')
+    const wrapped = d.detail._clines.ftor[2][1]
+    assert.ok(wrapped > 0)
+    d.detail.setScroll(wrapped)
+    d.render()
+    assert.equal(d.detail.lpos.base, wrapped)
+    await click(d.detail.lpos.xi + d.detail.ileft + 2, d.detail.lpos.yi + d.detail.itop)
+    assert.equal(copies.at(-1), cname)
+  }
+  assert.equal(copies.length, 2)
+})
+
+for (const enableACM of [false, true]) test(`Settings adds a domain ${enableACM ? 'with' : 'without'} ACM after confirmation`, async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const original = demo.api.appData.bind(demo.api)
+  const domain = {hostname: 'www.example.com', cname: 'target.herokudns.com', kind: 'custom', status: 'pending'}
+  const writes = []
+  demo.api.appData = async id => {
+    const data = await original(id)
+    return {...data, app: {...data.app, acm: false}, domains: writes.length ? [domain] : []}
+  }
+  demo.api.addDomain = async (...args) => { writes.push(args); return domain }
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('\r')
+  await key('5')
+  await key('D')
+  assert.match(d.modal._label.content, /Add Domain.*hostname/)
+  await key('WWW.EXAMPLE.COM')
+  await key('\r')
+  assert.match(d.modal._label.content, /SSL \/ ACM/)
+  if (enableACM) await key('\x0e')
+  await key('\r')
+  assert.match(d.modal._label.content, /Confirm remote change/)
+  assert.equal(writes.length, 0)
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [['constellation-staging', domain.hostname, enableACM, 'constellation-staging']])
+  assert.equal(d.rows[d.main.selected].kind, 'domain')
+  assert.equal(d.rows[d.main.selected].value.hostname, domain.hostname)
+  assert.match(d.message, /Added www.example.com/)
+  assert.equal(d.modal, null)
+})
+
+test('Settings domain creation supports cancellation, validation, and reports partial ACM failure', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('\r')
+  await key('5')
+  await key('D')
+  assert.equal(d.modal, undefined)
+  assert.match(d.message, /Read-only/)
+  d.api.readOnly = false
+  d.demo = false
+  d.api.addDomain = async () => assert.fail('Unconfirmed write')
+  await key('D')
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  await key('D')
+  await key('https://example.com')
+  await key('\r')
+  assert.match(d.message, /valid domain hostname/)
+  await key('D')
+  await key('www.example.com')
+  await key('\r')
+  // ACM is already enabled, so no ACM selection or additional write is needed.
+  assert.match(d.modal._label.content, /Confirm remote change/)
+  await key('wrong-app')
+  await key('\r')
+  assert.match(d.message, /did not match/)
+  const original = d.api.appData.bind(d.api)
+  const domain = {hostname: 'partial.example.com', cname: 'partial.herokudns.com'}
+  d.api.appData = async id => ({...await original(id), domains: [domain]})
+  d.api.addDomain = async () => { throw Object.assign(new Error('Domain was added, but enabling ACM failed'), {createdDomain: domain}) }
+  await key('D')
+  await key(domain.hostname)
+  await key('\r')
+  await key('constellation-staging')
+  await key('\r')
+  assert.match(d.message, /was added, but enabling ACM failed/)
+  assert.equal(d.rows[d.main.selected].value.hostname, domain.hostname)
+  assert.equal(d.busy, false)
+  assert.equal(d.modal, null)
+})
+
 test('y only copies an available config row and remains text inside prompts', async t => {
   const {dashboard: d, key} = await harness(t, {writeClipboard: async () => assert.fail('No config value should be copied')})
   await key('y') // Pipeline overview.

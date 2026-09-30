@@ -25,6 +25,21 @@ test('all views render demo data and errors without exposing config inadvertentl
   assert.match(JSON.stringify(appRows('Metrics', data)), /unavailable/)
 })
 
+test('Settings domain rows identify copyable Hostname and CNAME values and retain domain status', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  data.domains = [{hostname: 'www.example.com', cname: 'target.herokudns.com', kind: 'custom', status: 'succeeded', acm_status: 'pending'}]
+  const rows = appRows('Settings', data)
+  assert.ok(rows.some(row => row.id === 'action:add-domain'))
+  const domain = rows.find(row => row.kind === 'domain')
+  assert.deepEqual(domain.copyRanges.map(({start, end, label, value}) => [label, domain.detail.slice(start, end), value]), [
+    ['Hostname', 'www.example.com', 'www.example.com'], ['CNAME', 'target.herokudns.com', 'target.herokudns.com'],
+  ])
+  assert.match(domain.detail, /ACM status\s+pending/)
+  data.domains[0].cname = null
+  assert.deepEqual(appRows('Settings', data).find(row => row.kind === 'domain').copyRanges.map(range => range.label), ['Hostname'])
+})
+
 test('metrics columns show unavailable dyno counts as unknown rather than zero', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)

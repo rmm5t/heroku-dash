@@ -142,11 +142,27 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
       ['Region', app.region?.name], ['Stack', app.stack?.name], ['Build stack', app.build_stack?.name],
       ['Space', app.space?.name ?? 'Common Runtime'], ['ACM', app.acm ? 'Enabled' : 'Disabled'],
     ]), {icon: 'globe', tone: 'info', columns: ['Region / stack', `${app.region?.name ?? '—'} / ${app.stack?.name ?? '—'}`, '—']}))
+    rows.push(row('Add domain    [D] new', 'Press D to add a custom domain and optionally enable Automatic Certificate Management (ACM).\nACM is enabled for the entire app.\nConfigure DNS to point to the domain’s CNAME after adding it.',
+      {id: 'action:add-domain', icon: 'globe', tone: 'cyan', columns: ['Add domain', 'Custom hostname / optional ACM', '[D] new']}))
     error('domains'); error('buildpacks')
-    for (const domain of domains) rows.push(row(`Domain  ${domain.hostname}`, lines([
-      ['Hostname', domain.hostname], ['Kind', domain.kind], ['CNAME', domain.cname],
-      ['Status', domain.status], ['ACM status', domain.acm_status], ['ACM reason', domain.acm_status_reason],
-    ]), {icon: 'globe', tone: 'info', columns: ['Domain', domain.hostname, domain.status]}))
+    for (const domain of domains) {
+      let detail = ''
+      const copyRanges = []
+      for (const [label, value] of [
+        ['Hostname', domain.hostname], ['Kind', domain.kind], ['CNAME', domain.cname],
+        ['Status', domain.status], ['ACM status', domain.acm_status], ['ACM reason', domain.acm_status_reason],
+      ]) {
+        const prefix = `${label.padEnd(17)} `
+        const displayed = single(value)
+        if (['Hostname', 'CNAME'].includes(label) && typeof value === 'string' && value.length) {
+          copyRanges.push({start: detail.length + prefix.length, end: detail.length + prefix.length + displayed.length, label, value})
+        }
+        detail += `${prefix}${displayed}\n`
+      }
+      detail += '\nClick the cyan Hostname or CNAME value to copy it.\n[D] add domain'
+      rows.push(row(`Domain  ${domain.hostname}`, detail, {id: `domain:${domain.hostname}`, kind: 'domain', value: domain,
+        copyRanges, icon: 'globe', tone: 'info', columns: ['Domain', domain.hostname, domain.status]}))
+    }
     for (const item of buildpacks) rows.push(row(`Buildpack  ${item.ordinal}. ${item.buildpack?.name ?? item.buildpack?.url}`, lines([
       ['Buildpack', item.buildpack?.name], ['Order', item.ordinal], ['URL', item.buildpack?.url],
     ]), {icon: 'code', tone: 'accent', columns: [`Buildpack ${item.ordinal}`, item.buildpack?.name ?? item.buildpack?.url, '—']}))

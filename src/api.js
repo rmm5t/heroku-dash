@@ -1,4 +1,6 @@
 import {setTimeout as delay} from 'node:timers/promises'
+import {isIP} from 'node:net'
+import {domainToASCII} from 'node:url'
 
 const V3 = 'application/vnd.heroku+json; version=3'
 const encode = encodeURIComponent
@@ -8,6 +10,18 @@ export function validateAppName(name) {
   if (!/^[a-z][a-z0-9-]{1,28}[a-z0-9]$/.test(name ?? '')) {
     throw new Error('App names must be 3–30 lowercase letters, digits, or hyphens, start with a letter, and end with a letter or digit.')
   }
+}
+
+export function normalizeHostname(value) {
+  const input = String(value ?? '').trim().toLowerCase().replace(/\.$/, '')
+  const wildcard = input.startsWith('*.')
+  const domain = domainToASCII(wildcard ? input.slice(2) : input)
+  const labels = domain.split('.')
+  if (/[\s/:\\?#@%]/.test(input) || !domain || domain.length + (wildcard ? 2 : 0) > 253 || labels.length < 2 || isIP(domain)
+    || labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+    throw new Error('Enter a valid domain hostname, such as www.example.com, without a URL scheme, path, or port.')
+  }
+  return `${wildcard ? '*.' : ''}${domain}`
 }
 
 export function statusCode(error) {
@@ -204,6 +218,21 @@ export class HerokuAPI {
     this.confirm(app, confirmation)
     if (typeof enabled !== 'boolean') throw new Error('Maintenance mode must be a boolean.')
     return this.get(`/apps/${encode(app)}`, {method: 'PATCH', body: {maintenance: enabled}})
+  }
+
+  async addDomain(app, hostname, enableACM, confirmation) {
+    this.confirm(app, confirmation)
+    hostname = normalizeHostname(hostname)
+    if (typeof enableACM !== 'boolean') throw new Error('Choose whether to enable ACM.')
+    if (enableACM && hostname.startsWith('*.')) throw new Error('ACM does not support wildcard domains. Add this domain without enabling ACM.')
+    const domain = await this.get(`/apps/${encode(app)}/domains`, {method: 'POST', body: {hostname, sni_endpoint: null}})
+    if (enableACM) {
+      try { await this.get(`/apps/${encode(app)}/acm`, {method: 'POST', body: {}}) }
+      catch (error) {
+        throw Object.assign(new Error(`Domain ${hostname} was added, but enabling ACM failed: ${errorMessage(error)}`), {createdDomain: domain})
+      }
+    }
+    return domain
   }
 
   confirm(app, confirmation) {

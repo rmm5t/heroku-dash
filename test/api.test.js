@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {errorMessage, HerokuAPI} from '../src/api.js'
+import {errorMessage, HerokuAPI, normalizeHostname} from '../src/api.js'
 
 test('list follows Next-Range and preserves headers', async () => {
   const calls = []
@@ -29,6 +29,7 @@ test('read-only mode rejects every write before transport', async () => {
   await assert.rejects(api.maintenance('app', true, 'app'), /Read-only/)
   await assert.rejects(api.createPipelineApp({name: 'new-app'}, 'new-app'), /Read-only/)
   await assert.rejects(api.promotePipelineApp({source: {name: 'source-app'}}, 'source-app'), /Read-only/)
+  await assert.rejects(api.addDomain('app', 'www.example.com', true, 'app'), /Read-only/)
   for (const method of ['PATCH', 'POST', 'DELETE', 'PUT', 'patch']) await assert.rejects(api.request('/apps/app', {method}), /Read-only/)
   assert.equal(calls, 0)
 })
@@ -174,6 +175,48 @@ test('promotion tracking bounds polling and supports cancellation without repeat
   controller.abort()
   await assert.rejects(api.waitForPromotion({id: 'promotion-id'}, targets, {signal: controller.signal}), {name: 'AbortError'})
   assert.equal(requests, 2)
+})
+
+test('domain input validates hostnames and rejects URL components before any write', async () => {
+  assert.equal(normalizeHostname(' WWW.Example.COM. '), 'www.example.com')
+  assert.equal(normalizeHostname('bücher.example'), 'xn--bcher-kva.example')
+  assert.equal(normalizeHostname('*.example.com'), '*.example.com')
+  const api = new HerokuAPI({request() { assert.fail('Invalid domain reached transport') }})
+  for (const hostname of ['https://example.com', 'example.com/path', 'example.com?x', 'example.com#x', 'user@example.com', 'example.com:443', '127.0.0.1', 'bad_name.example', '-bad.example', 'localhost', 'a'.repeat(64) + '.example']) {
+    await assert.rejects(api.addDomain('app', hostname, false, 'app'), /valid domain hostname/)
+  }
+  await assert.rejects(api.addDomain('app', 'www.example.com', true, 'other-app'), /exact app name/)
+  await assert.rejects(api.addDomain('app', '*.example.com', true, 'app'), /ACM does not support wildcard/)
+})
+
+test('domain creation targets the confirmed app and optionally enables app-wide ACM', async () => {
+  const calls = []
+  const domain = {id: 'domain-id', hostname: 'www.example.com', cname: 'dns-target.herokudns.com'}
+  const api = new HerokuAPI({async request(path, options) { calls.push({path, ...options}); return {body: domain} }})
+  assert.deepEqual(await api.addDomain('app', 'WWW.EXAMPLE.COM', false, 'app'), domain)
+  assert.deepEqual(calls.map(({path, method, body}) => [method, path, body]), [
+    ['POST', '/apps/app/domains', {hostname: 'www.example.com', sni_endpoint: null}],
+  ])
+  calls.length = 0
+  await api.addDomain('app', domain.hostname, true, 'app')
+  assert.deepEqual(calls.map(({path, method, body}) => [method, path, body]), [
+    ['POST', '/apps/app/domains', {hostname: 'www.example.com', sni_endpoint: null}],
+    ['POST', '/apps/app/acm', {}],
+  ])
+})
+
+test('ACM failure reports that the domain was added and preserves the new domain', async () => {
+  const domain = {id: 'domain-id', hostname: 'www.example.com'}
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(options.method, 'POST')
+    if (path.endsWith('/acm')) throw new Error('ACM unavailable')
+    return {body: domain}
+  }})
+  await assert.rejects(api.addDomain('app', domain.hostname, true, 'app'), error => {
+    assert.equal(error.createdDomain, domain)
+    assert.match(error.message, /was added, but enabling ACM failed: ACM unavailable/)
+    return true
+  })
 })
 
 test('app sections fail independently and config is fetched lazily', async () => {

@@ -2,12 +2,12 @@ import blessed from 'blessed'
 import clipboard from 'clipboardy'
 import {spawn} from 'node:child_process'
 import packageJSON from '../../package.json' with {type: 'json'}
-import {APP_STAGES, errorMessage, validateAppName} from '../api.js'
+import {APP_STAGES, errorMessage, normalizeHostname, validateAppName} from '../api.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {fetchTelemetry, metricsScope} from '../metrics.js'
 import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
-import {detailContent, isValueClick} from './details.js'
+import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {badge, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
@@ -247,6 +247,8 @@ export class Dashboard {
       if (this.closed || this.modal || this.small.visible) return
       const row = this.rows[this.main.selected]
       if (this.revealed.has(row?.key) && isValueClick(this.detail, row, mouse)) void this.copyConfig()
+      const field = domainValueAt(this.detail, row, mouse)
+      if (field && TABS[this.tab] === 'Settings') void this.copyValue(field.value, field.label)
     })
     this.nav.on('select', item => {
       if (this.modal) return
@@ -305,6 +307,7 @@ export class Dashboard {
     key(['y'], () => void this.copyConfig())
     key(['e'], () => void this.editConfig(false))
     key(['n'], () => void this.editConfig(true))
+    key(['D', 'S-d'], () => void this.addDomain())
     key(['d'], () => void this.deleteConfig())
     key(['m'], () => void this.maintenance())
     key([':'], () => void this.customCommand())
@@ -1086,7 +1089,7 @@ export class Dashboard {
     })
   }
 
-  async mutate(action) {
+  async mutate(action, {successMessage = 'Change applied. App data refreshed.', selectRow} = {}) {
     // Lock navigation while a confirmed write is in flight. Its target and the
     // subsequent refresh must remain the app named in the confirmation.
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
@@ -1103,8 +1106,23 @@ export class Dashboard {
       this.revealed.clear()
       const refreshed = await this.loadApp()
       if (TABS[this.tab] === 'Config') await this.loadConfig()
-      this.setStatus(refreshed ? 'Change applied. App data refreshed.' : `Change applied, but refresh failed. ${this.message}`, refreshed ? 'success' : 'warning')
-    } catch (error) { this.setStatus(errorMessage(error), 'error') }
+      let selected = !selectRow
+      if (selectRow) {
+        const index = this.rows.findIndex(selectRow)
+        if (index >= 0) { this.main.select(index); selected = true }
+      }
+      this.setStatus(refreshed
+        ? `${successMessage}${selected ? '' : ' Domain details are not available yet; press R to refresh.'}`
+        : `Change applied, but refresh failed. ${this.message}`, refreshed && selected ? 'success' : 'warning')
+    } catch (error) {
+      if (error.createdDomain && !this.closed) {
+        this.busy = false
+        await this.loadApp()
+        const index = selectRow ? this.rows.findIndex(selectRow) : -1
+        if (index >= 0) this.main.select(index)
+      }
+      if (!this.closed) this.setStatus(errorMessage(error), 'error')
+    }
     finally { modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
   }
 
@@ -1155,13 +1173,18 @@ export class Dashboard {
     if (TABS[this.tab] !== 'Config' || !this.app || !this.config || this.copying) return
     const row = this.rows[this.main.selected]
     if (row?.kind !== 'config' || typeof this.config[row.key] !== 'string') return
+    // Copy the original value, not its masked, truncated, or sanitized display.
+    await this.copyValue(this.config[row.key], row.key)
+  }
+
+  async copyValue(value, label) {
+    if (!this.app || this.copying) return
     const generation = this.generation
     this.copying = true
-    this.setStatus(`Copying ${row.key} to clipboard…`)
+    this.setStatus(`Copying ${label} to clipboard…`)
     try {
-      // Copy the original value, not its masked, truncated, or sanitized display.
-      await this.writeClipboard(this.config[row.key])
-      if (!this.closed && generation === this.generation) this.setStatus(`Copied ${row.key} to clipboard.`, 'success')
+      await this.writeClipboard(value)
+      if (!this.closed && generation === this.generation) this.setStatus(`Copied ${label} to clipboard.`, 'success')
     } catch {
       // Clipboard backend errors may include stdin. Never display that output.
       if (!this.closed && generation === this.generation) this.setStatus('Could not copy value. Check your desktop session and clipboard tools; see README.', 'error')
@@ -1198,6 +1221,31 @@ export class Dashboard {
     const enabled = !app.maintenance
     const confirmation = await this.confirm(app, `${enabled ? 'Enable' : 'Disable'} maintenance mode.\n${enabled ? 'The app will serve the maintenance page.' : 'The app will resume serving requests.'}`)
     if (confirmation) await this.mutate(() => this.api.maintenance(app.name, enabled, confirmation))
+  }
+
+  async addDomain() {
+    if (TABS[this.tab] !== 'Settings' || !this.writable()) return
+    if (this.demo) { this.setStatus('Domain creation is disabled in the offline demo.', 'warning'); return }
+    const app = this.app
+    const generation = this.generation
+    const current = () => !this.closed && generation === this.generation && this.app?.id === app.id
+    const entered = await this.prompt('Add Domain · hostname', `${app.name}\nEnter a domain hostname, such as www.example.com.\nConfigure your DNS provider using the CNAME shown after creation.`, '', {icon: 'globe', readline: true})
+    if (entered === null || !current()) return
+    let hostname
+    try { hostname = normalizeHostname(entered) }
+    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
+    const enableACM = app.acm ? false : await this.choose('Add Domain · SSL / ACM',
+      'Automatic Certificate Management manages SSL certificates for the entire app.\nCertificates are issued after DNS is correctly configured.', [
+        {label: 'Add domain only', value: false}, {label: 'Enable SSL with ACM (app-wide)', value: true},
+      ])
+    if (enableACM === null || !current()) return
+    if (enableACM && hostname.startsWith('*.')) { this.setStatus('ACM does not support wildcard domains.', 'warning'); return }
+    const confirmation = await this.confirm(app, `Add domain ${hostname}\n${app.acm ? 'ACM is already enabled for this app.' : enableACM ? 'Enable Automatic Certificate Management (ACM) for the entire app.' : 'Keep the app’s ACM setting unchanged.'}\nConfigure DNS using the new domain’s CNAME.`, {highlightFirstLine: true})
+    if (!confirmation || !current()) return
+    await this.mutate(() => this.api.addDomain(app.name, hostname, enableACM, confirmation), {
+      successMessage: `Added ${hostname}.${enableACM ? ' ACM enabled; certificate issuance depends on DNS.' : ''} Select its cyan CNAME to copy the DNS target.`,
+      selectRow: row => row.kind === 'domain' && row.value.hostname === hostname,
+    })
   }
 
   async customCommand(initialCommand) {
@@ -1340,7 +1388,7 @@ export class Dashboard {
   help() {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
-      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
+      content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view in web dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop selected process by scaling it to 0\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy selected config value to clipboard\n  e / n / d       Replace / create / delete config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n\nBuilt-in remote changes require typing the exact target app name.\nCommand and exact-app inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a two-hour sparkline and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
