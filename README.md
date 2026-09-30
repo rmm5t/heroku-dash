@@ -47,12 +47,13 @@ heroku dash --pipeline my-pipeline     # Pipeline name or ID
 heroku dash --app my-app               # App name or ID
 heroku dash --remote staging           # App attached to a specific Git remote
 heroku dash --team my-team             # Start in a team
+heroku dash --team my-team --pipeline my-pipeline
 heroku dash --read-only                # Disable all remote changes
 heroku dash --refresh 60               # Refresh the current app every minute
 heroku dash --refresh 0                # Manual refresh only
 ```
 
-`--app`, `--pipeline`, `--remote`, and `--team` are mutually exclusive. The default refresh interval is 60 seconds; nonzero intervals must be at least 10 seconds.
+`--app`, `--pipeline`, and `--remote` are mutually exclusive. `--team` can be combined with `--pipeline` when the pipeline belongs to that team: the team scopes the sidebar's pipelines and apps while the specified pipeline opens. Pipeline names are resolved within the chosen team. `--team` cannot be combined with `--app` or `--remote`. The default refresh interval is 60 seconds; nonzero intervals must be at least 10 seconds.
 
 You can also set defaults with environment variables:
 
@@ -62,13 +63,13 @@ You can also set defaults with environment variables:
 | `HEROKU_DASH_PIPELINE` | `--pipeline` |
 | `HEROKU_DASH_REFRESH` | `--refresh` |
 
-Explicit command-line options take precedence. Any explicit `--app`, `--pipeline`, `--remote`, or `--team` replaces environment-based context choices. Without an explicit context option, `HEROKU_DASH_TEAM` and `HEROKU_DASH_PIPELINE` are mutually exclusive, just like their CLI options. Refresh values use the same validation as `--refresh`, including `0` to disable automatic refresh. Empty environment variables are ignored.
+Each explicit command-line option overrides its matching environment variable. Team and pipeline settings can be combined across CLI options and environment variables; for example, `HEROKU_DASH_TEAM` scopes an explicit `--pipeline`, and `HEROKU_DASH_PIPELINE` selects a pipeline within an explicit `--team`. An explicit `--app` or `--remote` overrides both environment-based context choices. Refresh values use the same validation as `--refresh`, including `0` to disable automatic refresh. Empty environment variables are ignored.
 
 ```sh
 export HEROKU_DASH_TEAM=my-team
 export HEROKU_DASH_REFRESH=120
 heroku dash                            # Browse my-team; refresh every two minutes
-heroku dash --pipeline other-pipeline --refresh 60
+heroku dash --pipeline my-pipeline --refresh 60  # Open my-pipeline within my-team
 ```
 
 ### Color themes

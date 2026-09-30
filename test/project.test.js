@@ -3,7 +3,7 @@ import test from 'node:test'
 import {parseRemotes, resolveContext, uniquePipeline} from '../src/project.js'
 
 const pipelines = [{id: 'p1', name: 'example-app'}, {id: 'p2', name: 'other-app'}]
-const catalog = {pipelines}
+const catalog = {pipelines, teams: [{id: 't1', name: 'team'}]}
 const api = {
   async get(path) { return {id: path.split('/').at(-1), name: path.split('/').at(-1)} },
   async coupling(app) { return {pipeline: pipelines[app.startsWith('other-app') ? 1 : 0]} },
@@ -46,6 +46,35 @@ test('duplicate pipeline names require IDs', () => {
   const duplicates = [...pipelines, {id: 'p3', name: 'example-app'}]
   assert.throws(() => uniquePipeline(duplicates, 'example-app'), /Multiple pipelines/)
   assert.equal(uniquePipeline(duplicates, 'p3').id, 'p3')
+})
+
+test('team scopes pipeline name resolution and selects the requested pipeline by name or ID', async () => {
+  const teams = [{id: 't1', name: 'first-team'}, {id: 't2', name: 'second-team'}]
+  const pipelines = teams.map(team => ({id: `pipeline-${team.id}`, name: 'shared-name', owner: {type: 'team', id: team.id}}))
+  const catalog = {teams, pipelines}
+  for (const team of teams) {
+    for (const selector of [team.name, team.id]) {
+      const pipeline = pipelines.find(pipeline => pipeline.owner.id === team.id)
+      for (const pipelineSelector of [pipeline.name, pipeline.id]) {
+        const context = await resolveContext(api, catalog, {team: selector, pipeline: pipelineSelector}, {name: 'other-app'})
+        assert.equal(context.team, team)
+        assert.equal(context.pipeline, pipeline)
+        assert.equal(context.app, undefined)
+      }
+    }
+  }
+})
+
+test('team and pipeline combinations reject unknown teams and pipelines outside the team', async () => {
+  const teams = [{id: 't1', name: 'first-team'}, {id: 't2', name: 'second-team'}]
+  const catalog = {teams, pipelines: [
+    {id: 'outside', name: 'outside-pipeline', owner: {type: 'team', id: 't2'}},
+    {id: 'personal', name: 'personal-pipeline', owner: {type: 'user', id: 'user-id'}},
+  ]}
+  await assert.rejects(resolveContext(api, catalog, {team: 'missing', pipeline: 'outside'}), /Team not found/)
+  for (const pipeline of ['outside', 'outside-pipeline', 'personal', 'missing']) {
+    await assert.rejects(resolveContext(api, catalog, {team: 'first-team', pipeline}), /Pipeline not found in team first-team/)
+  }
 })
 
 test('inaccessible remote produces a warning and permits directory fallback', async () => {

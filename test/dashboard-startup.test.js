@@ -6,7 +6,8 @@ import blessed from 'blessed'
 import {Parser} from '@oclif/core'
 import Dash from '../src/commands/dash.js'
 import {createDemo} from '../src/demo.js'
-import {runDashboard} from '../src/ui/dashboard.js'
+import {resolveContext} from '../src/project.js'
+import {Dashboard, runDashboard} from '../src/ui/dashboard.js'
 import {palettes} from '../src/ui/theme.js'
 import {ThemeInput} from '../src/ui/terminal-theme.js'
 
@@ -74,13 +75,29 @@ test('Dash environment variables supply team, pipeline, and refresh options', as
   assert.equal(pipelineFlags.refresh, 0)
 })
 
-test('explicit context options override all environment context choices, including short and attached flags', async t => {
+test('team and pipeline options override matching environment defaults while retaining the other scope', async t => {
   dashEnvironment(t, {HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_PIPELINE: 'env-pipeline', HEROKU_DASH_REFRESH: '120'})
   for (const [argv, name, value] of [
     [['--team', 'cli-team'], 'team', 'cli-team'],
     [['-tcli-team'], 'team', 'cli-team'],
     [['--pipeline=cli-pipeline'], 'pipeline', 'cli-pipeline'],
     [['-p', 'cli-pipeline'], 'pipeline', 'cli-pipeline'],
+  ]) {
+    const {flags} = await parseOptions(argv)
+    assert.equal(flags.team, name === 'team' ? value : 'env-team')
+    assert.equal(flags.pipeline, name === 'pipeline' ? value : 'env-pipeline')
+    assert.equal(flags.refresh, 120)
+  }
+  const {flags} = await parseOptions(['--team', 'cli-team', '--pipeline', 'cli-pipeline'])
+  assert.equal(flags.team, 'cli-team')
+  assert.equal(flags.pipeline, 'cli-pipeline')
+  assert.equal(process.env.HEROKU_DASH_TEAM, 'env-team')
+  assert.equal(process.env.HEROKU_DASH_PIPELINE, 'env-pipeline')
+})
+
+test('explicit app and remote options override environment context choices', async t => {
+  dashEnvironment(t, {HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_PIPELINE: 'env-pipeline', HEROKU_DASH_REFRESH: '120'})
+  for (const [argv, name, value] of [
     [['--app', 'cli-app'], 'app', 'cli-app'],
     [['-acli-app'], 'app', 'cli-app'],
     [['--remote=staging'], 'remote', 'staging'],
@@ -90,8 +107,6 @@ test('explicit context options override all environment context choices, includi
     for (const context of ['app', 'pipeline', 'remote', 'team']) assert.equal(flags[context], context === name ? value : undefined)
     assert.equal(flags.refresh, 120)
   }
-  assert.equal(process.env.HEROKU_DASH_TEAM, 'env-team')
-  assert.equal(process.env.HEROKU_DASH_PIPELINE, 'env-pipeline')
 })
 
 test('explicit refresh options override environment values, including zero and invalid defaults', async t => {
@@ -109,8 +124,12 @@ test('environment options retain integer, interval, and context exclusivity vali
     await assert.rejects(parseOptions([]), /refresh|integer/i)
   }
   setEnv({HEROKU_DASH_TEAM: 'env-team', HEROKU_DASH_PIPELINE: 'env-pipeline'})
-  await assert.rejects(parseOptions([]), /cannot also be provided/)
-  await assert.rejects(parseOptions(['--team', 'cli-team', '--pipeline', 'cli-pipeline']), /cannot also be provided/)
+  const {flags} = await parseOptions([])
+  assert.equal(flags.team, 'env-team')
+  assert.equal(flags.pipeline, 'env-pipeline')
+  for (const argv of [['--app', 'app', '--pipeline', 'pipeline'], ['--team', 'team', '--app', 'app'], ['--team', 'team', '--remote', 'staging']]) {
+    await assert.rejects(parseOptions(argv), /cannot also be provided/)
+  }
 })
 
 test('unset or empty Dash environment variables retain built-in defaults', async t => {
@@ -121,6 +140,34 @@ test('unset or empty Dash environment variables retain built-in defaults', async
   assert.equal(flags.team, undefined)
   assert.equal(flags.pipeline, undefined)
   assert.equal(flags.refresh, 60)
+})
+
+test('combined environment defaults open the selected pipeline and scope pipeline and app sidebars to its team', async t => {
+  const demo = createDemo()
+  const team = demo.catalog.teams[0]
+  const pipeline = demo.context.pipeline
+  const otherTeam = {id: 'other-team', name: 'other-team'}
+  const earlierPipeline = {id: 'earlier-pipeline', name: 'earlier-pipeline', owner: {id: team.id, type: 'team'}}
+  const outsidePipeline = {id: 'outside-pipeline', name: 'outside-pipeline', owner: {id: otherTeam.id, type: 'team'}}
+  demo.catalog.teams.push(otherTeam)
+  demo.catalog.pipelines = [earlierPipeline, outsidePipeline, pipeline]
+  demo.catalog.apps = [...demo.catalog.apps, {...demo.catalog.apps[0], id: 'outside-app', name: 'outside-app', team: otherTeam}]
+  dashEnvironment(t, {HEROKU_DASH_TEAM: team.name, HEROKU_DASH_PIPELINE: pipeline.name, HEROKU_DASH_REFRESH: '0'})
+  const {flags} = await parseOptions([])
+  const context = await resolveContext(demo.api, demo.catalog, flags)
+  const io = terminal(t)
+  const dashboard = new Dashboard({...demo, context, screen: io.screen, refresh: flags.refresh})
+  t.after(() => dashboard.close())
+  await dashboard.start()
+  assert.equal(dashboard.team.id, team.id)
+  assert.equal(dashboard.pipeline.id, pipeline.id)
+  assert.deepEqual(dashboard.navItems.map(item => item.id), [earlierPipeline.id, pipeline.id])
+  assert.equal(dashboard.navItems[dashboard.nav.selected].id, pipeline.id)
+  assert.ok(dashboard.rows.every(row => row.kind === 'app' && row.value.team.id === team.id))
+  dashboard.setMode('apps')
+  assert.ok(dashboard.navItems.length > 0)
+  assert.ok(dashboard.navItems.every(app => app.team.id === team.id))
+  assert.equal(dashboard.pipeline.id, pipeline.id)
 })
 
 test('startup detects a light terminal before rendering and restores raw mode on exit', {timeout: 2000}, async t => {

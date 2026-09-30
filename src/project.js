@@ -33,20 +33,28 @@ export function uniquePipeline(pipelines, nameOrId) {
 }
 
 export async function resolveContext(api, catalog, options = {}, project = {}) {
+  const team = options.team ? catalog.teams?.find(team => team.id === options.team || team.name === options.team) : undefined
+  if (options.team && !team) throw new Error(`Team not found: ${options.team}`)
   const byApp = async name => {
     const app = await api.get(`/apps/${encodeURIComponent(name)}`)
     const coupling = await api.coupling(app.id)
     return {app, pipeline: coupling?.pipeline ?? null}
   }
   if (options.app) return {...await byApp(options.app), reason: `App: ${options.app}`}
-  if (options.pipeline) return {pipeline: uniquePipeline(catalog.pipelines, options.pipeline), reason: 'Explicit pipeline'}
+  if (options.pipeline) {
+    const pipelines = team ? catalog.pipelines.filter(pipeline => pipeline.owner?.type === 'team' && pipeline.owner.id === team.id) : catalog.pipelines
+    if (team && !pipelines.some(pipeline => pipeline.id === options.pipeline || pipeline.name === options.pipeline)) {
+      throw new Error(`Pipeline not found in team ${team.name}: ${options.pipeline}`)
+    }
+    return {pipeline: uniquePipeline(pipelines, options.pipeline), ...(team ? {team} : {}), reason: 'Explicit pipeline'}
+  }
   if (options.remote) {
     const remote = project.remotes?.find(r => r.remote === options.remote)
     if (!remote) throw new Error(`No Heroku Git remote named ${options.remote} in this repository.`)
     return {...await byApp(remote.app), reason: `Git remote: ${remote.remote}`}
   }
   // An explicit team is a browsing scope, not a request to select a local app.
-  if (options.team) return {reason: `Team: ${options.team}`}
+  if (team) return {team, reason: `Team: ${options.team}`}
   const contexts = []
   const warnings = []
   for (const remote of project.remotes ?? []) {
