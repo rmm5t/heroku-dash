@@ -2224,6 +2224,145 @@ test('filter input supports readline editing of long pre-filled values without c
   assert.equal(d.navItems.length, 1)
 })
 
+test('L tails app-scoped logs in read-only mode with pause, scrolling, filtering, and sanitized output', async t => {
+  const execution = Promise.withResolvers()
+  const calls = []
+  const {dashboard: d, screen, key} = await harness(t, {demo: false,
+    commandHistory: {entries: [], add() { assert.fail('Viewing logs must not write command history') }},
+    executeHeroku: (args, options) => { calls.push({args, ...options}); return execution.promise }})
+  assert.equal(d.api.readOnly, true)
+  await key('\r')
+  const previous = screen.focused
+  const cached = d.appSnapshots.get(d.app.id)
+  await key('L')
+  assert.match(clean(d.modal._label.content), /Logs.*constellation-staging/)
+  assert.deepEqual(calls[0].args, ['logs', '--tail', '--num', '100', '--app', d.app.name])
+  const output = d.logRequest.output
+  calls[0].onOutput('first ERROR literal {red-fg}\n\x1b[31mnormal\x1b[0m\n\x1b]52;c;hidden-value\x07')
+  calls[0].onOutput(Array.from({length: 80}, (_, index) => `line ${index}\n`).join(''))
+  await delay(125)
+  assert.match(output.content, /first ERROR literal \{red-fg\}/)
+  assert.ok(!output.content.includes('hidden-value'))
+  assert.ok(!output.content.includes('\x1b'))
+  const followingScroll = output.childBase
+  await key('k')
+  assert.ok(output.childBase < followingScroll)
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Paused display/)
+  const pausedScroll = output.childBase
+  const pausedText = output.content
+  calls[0].onOutput('newest ERROR line\n')
+  await delay(125)
+  assert.equal(output.content, pausedText)
+  assert.equal(output.childBase, pausedScroll)
+
+  await key('/')
+  await key('error')
+  await key('\r')
+  assert.match(output.content, /first ERROR/)
+  assert.ok(!output.content.includes('normal'))
+  assert.ok(!output.content.includes('newest ERROR'))
+  await key('p')
+  assert.match(output.content, /newest ERROR/)
+  await key('/')
+  await key('\x15')
+  await key('\r')
+  assert.match(output.content, /normal/)
+  await key(' ')
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Paused display/)
+  await key('\x1b[F')
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Following/)
+  await key('/')
+  await key('cancelled query')
+  await key('\x1b')
+  assert.ok(d.logRequest)
+  assert.match(output.content, /normal/)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(d.appSnapshots.get(d.app.id), cached)
+  await key('q')
+  assert.equal(calls[0].signal.aborted, true)
+  assert.equal(d.logRequest, null)
+  assert.equal(d.modal, null)
+  assert.equal(d.closed, false)
+  assert.equal(screen.focused, previous)
+  calls[0].onOutput('late output\n')
+  execution.reject(new Error('late failure'))
+  await delay(10)
+  assert.equal(d.message, 'Log viewer closed.')
+})
+
+test('log streams and filter editors are cleaned up on app or pipeline navigation and Ctrl-C', async t => {
+  for (const destination of ['app', 'pipeline', 'exit']) {
+    const execution = Promise.withResolvers()
+    let options
+    const {dashboard: d, screen, key} = await harness(t, {demo: false,
+      executeHeroku: (_args, value) => { options = value; return execution.promise }})
+    await d.openApp(d.rows[0].value)
+    const running = d.openLogs()
+    const modal = d.modal
+    options.onOutput('queued log output\n')
+    await key('/')
+    assert.equal(screen.grabKeys, true)
+    if (destination === 'app') await d.openApp(d.catalog.apps.find(app => app.id !== d.app.id))
+    else if (destination === 'pipeline') await d.openPipeline(d.catalog.pipelines[0])
+    else await key('\x03')
+    await running
+    assert.equal(options.signal.aborted, true)
+    assert.equal(d.logRequest, null)
+    assert.equal(d.modal, null)
+    assert.equal(modal.destroyed, true)
+    assert.equal(screen.grabKeys, false)
+    const message = d.message
+    options.onOutput('obsolete output\n')
+    execution.reject(new Error('obsolete failure'))
+    await delay(125)
+    assert.equal(d.message, message)
+    assert.equal(d.closed, destination === 'exit')
+    d.close()
+  }
+})
+
+test('log stream completion and failures remain inspectable, suppress late output, and allow reopening', async t => {
+  for (const outcome of ['ended', 'nonzero', 'failed']) {
+    let options
+    let calls = 0
+    const {dashboard: d, key} = await harness(t, {demo: false, executeHeroku: async (_args, value) => {
+      calls++
+      options = value
+      if (outcome === 'failed') throw new Error('Could not start Heroku CLI')
+      value.onOutput('last log record\n')
+      return {code: outcome === 'ended' ? 0 : 1, signal: null}
+    }})
+    await d.openApp(d.rows[0].value)
+    await d.openLogs()
+    const output = d.logRequest.output
+    const text = output.content
+    const content = d.modal.children.map(child => clean(child.content)).join('\n')
+    assert.match(content, outcome === 'ended' ? /Stream ended/ : outcome === 'nonzero' ? /code 1/ : /Could not start Heroku CLI/)
+    options.onOutput('late record\n')
+    await delay(125)
+    assert.equal(output.content, text)
+    await d.openLogs()
+    assert.equal(calls, 1)
+    await key('q')
+    await d.openLogs()
+    assert.equal(calls, 2)
+    await key('\x1b')
+    assert.equal(d.logRequest, null)
+    d.close()
+  }
+})
+
+test('log viewing requires an app and remains offline in demo mode', async t => {
+  const {dashboard: d, key} = await harness(t, {demo: true, executeHeroku: () => assert.fail('Offline logs must not launch Heroku')})
+  await key('L')
+  assert.equal(d.logRequest, null)
+  await key('\r')
+  await key('L')
+  assert.match(d.message, /disabled in the offline demo/)
+  assert.equal(d.logRequest, null)
+  assert.ok(!d.modal)
+})
+
 test('app-scoped Heroku commands require confirmation and stream sanitized output in a floating pane', async t => {
   const demo = createDemo()
   demo.api.readOnly = false

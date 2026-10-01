@@ -186,8 +186,19 @@ App actions:
 | `x` | Settings | Remove the selected custom domain |
 | `:` | Any app view | Run a custom Heroku CLI command scoped to the current app |
 | `C` | Any app view | Open the default app console |
+| `L` / `Shift-L` | Any app view | Open a live log viewer for the current app |
 
 In every text prompt, `Enter` continues and `Esc` cancels. Readline-style editing supports `Ctrl-A` / `Ctrl-E`, `Ctrl-B` / `Ctrl-F`, `Ctrl-T`, `Ctrl-U` / `Ctrl-K`, `Ctrl-W` / `Ctrl-Y`, and `Alt-B` / `Alt-F` / `Alt-D`. `Ctrl-U` kills text to the left of the cursor; `Ctrl-Y` restores the last killed text. Config-value input is masked. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
+
+### Live logs
+
+Press **L** from any app view to open a scrollable log viewer. It runs `heroku logs --tail --num 100` scoped to the current app, using your existing CLI login, and works in `--read-only` mode. Log streaming is disabled in the offline demo.
+
+- **p / Space** pauses or resumes the display. Scrolling up with **k / ↑ / Page Up / Ctrl-P** or the mouse also pauses following; **End** resumes at the latest logs.
+- **/** opens a case-insensitive, literal text filter. Press **Enter** to apply, **Esc** to cancel, or submit an empty filter to show all lines. Filtering works on the retained buffer.
+- **Esc / q** closes the viewer and stops streaming; **Ctrl-C** exits Dash. Switching apps or pipelines also stops the stream. If the stream ends, close the viewer and press **L** to reconnect.
+
+The buffer retains at most **10,000 lines / 2,000,000 characters**. Pausing freezes the displayed snapshot while incoming logs continue into the bounded buffer; resuming shows its latest tail. Output updates are batched, terminal control sequences are removed, and logs stay in memory only while the viewer is open.
 
 ## Remote changes and config values
 
@@ -268,7 +279,7 @@ Press **`o`** on a memory, dyno-load, or process-health row to open that process
 
 Platform snapshots remain below the performance rows: configured/healthy dyno counts, process state, and recent releases. `up` and `idle` formation dynos count as healthy, and one-off processes are excluded from formation health. During deploys, overlapping dynos can exceed the desired count.
 
-Add-on provisioning/plan changes, pipeline promotions, log streaming, and domain/buildpack edits are outside this version. Settings other than maintenance mode are displayed read-only.
+Add-on provisioning/plan changes and buildpack edits are outside this version. App settings other than maintenance mode and custom domains are displayed read-only.
 
 ## Development and verification
 

@@ -12,6 +12,7 @@ import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from
 import {age, ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
+import {LogBuffer, LOG_LIMITS} from './log-buffer.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 
@@ -181,6 +182,7 @@ export class Dashboard {
     this.revealed = new Set()
     this.copying = false
     this.commandRequest = null
+    this.logRequest = null
     this.interactiveRequest = null
     this.promotionRequest = null
     this.openingBrowser = false
@@ -326,6 +328,7 @@ export class Dashboard {
     key(['m'], () => void this.maintenance())
     key([':'], () => void this.customCommand())
     key(['C', 'S-c'], () => void this.customCommand('console'))
+    key(['L', 'S-l'], () => void this.openLogs())
     key(['o'], () => void this.openBrowser())
     key(['?'], () => this.help())
   }
@@ -433,7 +436,7 @@ export class Dashboard {
     const footerContext = appContext ? this.pipeline ? 'pipeline-app' : 'app' : this.pipeline ? 'pipeline' : 'workspace'
     if (this.footerContext !== footerContext) {
       this.footerContext = footerContext
-      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console']] : this.pipeline ? [['A', 'add app']] : []), ...(this.pipeline ? [['P', 'promote']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
+      const secondRow = [['j/k', 'move'], ['1–7 / [ ] / h l', 'views'], ['R/g', 'refresh'], ...(appContext ? [[':', 'command'], ['C', 'console'], ['L', 'logs']] : this.pipeline ? [['A', 'add app']] : []), ...(this.pipeline ? [['P', 'promote']] : []), ['o', 'browser'], ['?', 'help'], ['q', 'quit']]
       this.footer.setContent(`${[['t', 'teams'], ['p', 'pipelines'], ['a', 'apps'], ['/', 'filter'], ['Enter', 'open'], ['Tab', 'focus']].map(([key, text]) => shortcut(key, text)).join('  ')}\n${secondRow.map(([key, text]) => shortcut(key, text)).join('  ')}`)
     }
     this.drawStatus()
@@ -480,6 +483,7 @@ export class Dashboard {
   }
 
   clearApp() {
+    this.logRequest?.close({restoreFocus: false})
     this.generation++
     this.readRequests.cancelAll()
     this.resetMetrics()
@@ -1598,6 +1602,119 @@ export class Dashboard {
     }
   }
 
+  async openLogs() {
+    if (!this.app || this.closed || this.busy || this.modal) return
+    if (this.demo) { this.setStatus('Log streaming is disabled in the offline demo.', 'warning'); return }
+    const app = this.app
+    const generation = this.generation
+    const previous = this.screen.focused
+    const buffer = new LogBuffer()
+    const controller = new AbortController()
+    const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '95%', height: '85%', ...frame(),
+      label: ` ${icons.code}  Logs · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
+    const heading = blessed.box({parent: modal, top: 0, left: 2, right: 2, height: 1, tags: false,
+      style: {fg: palette.muted, bg: palette.bg}})
+    const output = blessed.box({parent: modal, top: 2, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true,
+      keys: true, vi: true, mouse: true, tags: false, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
+    bindMovementKeys(output)
+    const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
+      style: {fg: palette.muted, bg: palette.bg}})
+    const request = {controller, modal, output, close: null}
+    this.logRequest = request
+    this.modal = modal
+    let input = null
+    let timer = null
+    let status = 'Connecting…'
+    let tone = 'info'
+    let finished = false
+    const current = () => !this.closed && this.logRequest === request && generation === this.generation && this.app?.id === app.id
+    const draw = ({resetScroll = false} = {}) => {
+      if (!current()) return
+      const scroll = output.childBase
+      heading.setContent(`Filter: ${buffer.filter ? single(buffer.filter) : '(none)'} · buffer ≤ ${LOG_LIMITS.lines} lines / ${LOG_LIMITS.characters / 1000}k characters`)
+      output.setContent(buffer.content || (buffer.filter ? 'No matching log lines.' : 'Waiting for log output…'))
+      if (buffer.paused) output.setScroll(resetScroll ? 0 : scroll)
+      else output.setScrollPerc(100)
+      footer.setContent(`${shortcut('p / Space', buffer.paused ? 'resume' : 'pause')}  ${shortcut('/', 'filter')}  ${shortcut('End', 'follow')}  ${shortcut('Esc / q', 'close')}\n${paint(`${buffer.paused ? 'Paused display' : 'Following'} · ${status}`, buffer.paused ? 'warning' : tone)}`)
+      this.render()
+    }
+    request.close = ({restoreFocus = true} = {}) => {
+      if (this.logRequest !== request) return
+      this.logRequest = null
+      controller.abort()
+      clearTimeout(timer)
+      buffer.clear()
+      input?._done?.('stop')
+      input = null
+      modal.destroy()
+      if (this.modal === modal) this.modal = null
+      if (restoreFocus && !this.closed) { previous?.focus(); this.setStatus('Log viewer closed.') }
+    }
+    const pause = () => { buffer.pause(); draw() }
+    const resume = () => { buffer.resume(); draw() }
+    const editFilter = () => {
+      if (input || !current()) return
+      output.top = 4
+      input = blessed.textbox({parent: modal, top: 1, left: 2, right: 2, height: 3, ...frame(), label: ' Filter logs ',
+        inputOnFocus: true, value: buffer.filter})
+      const editor = input
+      const finish = value => {
+        if (input !== editor || !current()) return
+        input = null
+        editor.destroy()
+        output.top = 2
+        if (value !== null) buffer.filter = value
+        output.focus()
+        draw({resetScroll: value !== null})
+      }
+      editor.on('submit', value => finish(value))
+      editor.on('cancel', () => finish(null))
+      editor.key(['C-c'], () => this.close())
+      enableReadline(editor, [], () => this.render())
+      editor.focus()
+      this.render()
+    }
+    output.key(['p', 'space'], () => { if (buffer.paused) resume(); else pause() })
+    output.key(['end', 'G'], resume)
+    output.key(['k', 'up', 'pageup', 'C-p'], pause)
+    output.on('wheelup', pause)
+    output.key(['/'], editFilter)
+    modal.key(['escape', 'q'], () => { if (!input) request.close() })
+    output.key(['escape', 'q'], () => request.close())
+    output.focus()
+    draw()
+    try {
+      const result = await withAbort(this.executeHeroku(scopedHerokuCommand('logs --tail --num 100', app.name), {
+        signal: controller.signal,
+        onOutput: chunk => {
+          if (!current() || finished) return
+          buffer.append(chunk)
+          status = 'Streaming'
+          if (!buffer.paused && !timer) {
+            timer = setTimeout(() => { timer = null; draw() }, 100)
+            timer.unref()
+          }
+        },
+      }), controller.signal)
+      if (!current()) return
+      finished = true
+      status = result.code === 0 ? 'Stream ended. Close and press L to reconnect.' : `Stream exited with ${result.signal ?? `code ${result.code}`}.`
+      tone = result.code === 0 ? 'muted' : 'error'
+      clearTimeout(timer)
+      timer = null
+      draw()
+    } catch (error) {
+      if (!current()) return
+      finished = true
+      status = `Log stream failed: ${errorMessage(error)}`
+      tone = 'error'
+      buffer.append(`\n${errorMessage(error)}\n`)
+      clearTimeout(timer)
+      timer = null
+      draw()
+    }
+  }
+
   async openBrowser() {
     if (this.demo) { this.setStatus('Browser links are disabled in the offline demo.'); return }
     if (this.openingBrowser || this.closed) return
@@ -1638,7 +1755,7 @@ export class Dashboard {
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
       content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nAll text inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
-    modal.setContent(highlightKeys(modal.content))
+    modal.setContent(highlightKeys(`${modal.content}\n\nLOG VIEWER\n  L               Tail logs for the current app (also in read-only mode)\n  p / Space       Pause / resume display; scrolling up also pauses\n  /               Filter buffered lines (case-insensitive text)\n  End             Resume following the latest logs\n  Esc / q         Close viewer and stop streaming`))
     this.modal = modal
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
@@ -1649,6 +1766,7 @@ export class Dashboard {
   close() {
     if (this.closed) return
     this.closed = true
+    this.logRequest?.close({restoreFocus: false})
     this.readRequests.cancelAll()
     this.metricsRequest = null
     this.commandRequest?.controller.abort()
