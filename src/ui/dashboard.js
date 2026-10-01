@@ -7,7 +7,7 @@ import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuComma
 import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
-import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
+import {ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
@@ -559,22 +559,37 @@ export class Dashboard {
     const request = this.readRequests.start('app')
     const {signal} = request.controller
     const app = this.app
+    const initial = !this.data
+    let progressive
     const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…`)
     try {
-      const data = await withAbort(this.api.appData(app.id, {signal}), signal)
+      const data = await withAbort(this.api.appData(app.id, {signal, onUpdate: snapshot => {
+        if (!initial || !request.current() || !snapshot.app) return
+        // Keep the snapshot identity stable so unrelated sections completing
+        // cannot invalidate in-flight resource enrichment or telemetry.
+        progressive ??= {}
+        Object.assign(progressive, snapshot)
+        this.data = progressive
+        this.app = snapshot.app
+        if (!snapshot.pending.includes('coupling')) this.pipeline = snapshot.coupling?.pipeline ?? null
+        this.breadcrumbTeam = snapshot.app.team ?? null
+        this.drawApp({preserveScroll: true})
+        void this.loadResourceDetails({force: forceResources})
+        void this.loadMetrics()
+      }}), signal)
       if (!request.current()) return
       this.pipeline = data.coupling?.pipeline ?? null
       this.breadcrumbTeam = data.app.team ?? null
-      this.resetResourceDetails()
-      this.data = data
+      if (!progressive) this.resetResourceDetails()
+      this.data = progressive ? Object.assign(progressive, data, {pending: []}) : data
       this.app = data.app
       if (this.metricsSignature && this.metricsSignature !== metricsScope(data, this.metricsWindowHours)) this.resetMetrics()
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
       this.messageTone = Object.keys(data.errors).length ? 'warning' : 'success'
-      this.drawApp({preserveScroll: automatic && TABS[this.tab] === 'Metrics'})
-      void this.loadAppHierarchy(data)
+      this.drawApp({preserveScroll: Boolean(progressive) || automatic && TABS[this.tab] === 'Metrics'})
+      void this.loadAppHierarchy(this.data)
       void this.loadResourceDetails({force: forceResources})
-      void this.loadMetrics({refresh: true, force: !automatic})
+      void this.loadMetrics({refresh: !progressive, force: !progressive && !automatic})
       return true
     } catch (error) {
       if (request.current()) {
@@ -628,7 +643,8 @@ export class Dashboard {
     }
     const scroll = this.detail.childBase
     const {app, formation, errors} = this.data
-    this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', `${this.data.addons.length} add-ons`, 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
+    const pending = this.data.pending ?? []
+    this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', pending.includes('formation') ? 'Loading dynos…' : errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, pending.includes('formation') ? 'info' : errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', pending.includes('addons') ? 'Loading add-ons…' : errors.addons ? 'Add-ons unavailable' : `${this.data.addons.length} add-ons`, pending.includes('addons') ? 'info' : errors.addons ? 'warning' : 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
     this.setRows(appRows(TABS[this.tab], this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
@@ -659,6 +675,7 @@ export class Dashboard {
 
   async loadMetrics({refresh = false, force = false} = {}) {
     if (TABS[this.tab] !== 'Metrics' || !this.data || this.closed) return
+    if (pendingSections('Metrics', this.data).length) return
     const signature = metricsScope(this.data, this.metricsWindowHours)
     if (this.metricsRequest && !force) return
     if (!force && !refresh && this.metricsSignature === signature && Date.now() - this.metricsRequestedAt < 30_000) return
@@ -697,6 +714,7 @@ export class Dashboard {
   async loadResourceDetails({force = false} = {}) {
     const kind = {Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]]
     if (!kind || !this.resources?.available || !this.data || this.closed) return
+    if (pendingSections(TABS[this.tab], this.data).length) return
     if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.readRequests.has(`resources-${kind}`))) return
     const data = this.data
     const request = this.readRequests.start(`resources-${kind}`, () => this.data === data)

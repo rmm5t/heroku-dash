@@ -147,26 +147,32 @@ export class HerokuAPI {
   }
 
   async appData(app, options = {}) {
+    const {onUpdate, ...requestOptions} = options
     const base = `/apps/${encode(app)}`
     const sections = {
-      app: () => this.get(base, options),
-      coupling: () => this.coupling(app, options),
-      formation: () => this.list(`${base}/formation`, options),
-      dynos: () => this.list(`${base}/dynos`, options),
-      addons: () => this.list(`${base}/addons`, options),
-      attachments: () => this.list(`${base}/addon-attachments`, options),
-      domains: () => this.list(`${base}/domains`, options),
-      buildpacks: () => this.list(`${base}/buildpack-installations`, options),
+      app: () => this.get(base, requestOptions),
+      coupling: () => this.coupling(app, requestOptions),
+      formation: () => this.list(`${base}/formation`, requestOptions),
+      dynos: () => this.list(`${base}/dynos`, requestOptions),
+      addons: () => this.list(`${base}/addons`, requestOptions),
+      attachments: () => this.list(`${base}/addon-attachments`, requestOptions),
+      domains: () => this.list(`${base}/domains`, requestOptions),
+      buildpacks: () => this.list(`${base}/buildpack-installations`, requestOptions),
       // Only the latest page: release histories can be enormous.
-      releases: () => this.get(`${base}/releases`, {...options, headers: {...options.headers, Range: 'version ..; order=desc,max=20;'}}),
+      releases: () => this.get(`${base}/releases`, {...requestOptions, headers: {...requestOptions.headers, Range: 'version ..; order=desc,max=20;'}}),
     }
-    const data = {errors: {}, fetchedAt: new Date().toISOString()}
+    const pending = new Set(Object.keys(sections))
+    const data = {errors: {}, fetchedAt: new Date().toISOString(),
+      ...Object.fromEntries([...pending].map(key => [key, ['app', 'coupling'].includes(key) ? null : []]))}
     await Promise.all(Object.entries(sections).map(async ([key, load]) => {
       try { data[key] = await load() }
       catch (error) {
         options.signal?.throwIfAborted()
         data.errors[key] = errorMessage(error); data[key] = ['app', 'coupling'].includes(key) ? null : []
       }
+      options.signal?.throwIfAborted()
+      pending.delete(key)
+      onUpdate?.({...data, errors: {...data.errors}, pending: [...pending]}, key)
     }))
     options.signal?.throwIfAborted()
     if (!data.app) throw new Error(data.errors.app)

@@ -18,6 +18,15 @@ const row = (label, detail, extra = {}) => ({label: single(label), detail: clean
 export const TABS = ['Overview', 'Resources', 'Add-ons', 'Config', 'Settings', 'Releases', 'Metrics']
 export const STAGES = ['development', 'review', 'staging', 'production']
 
+export function pendingSections(tab, data) {
+  const required = {
+    Overview: ['app', 'formation', 'addons'], Resources: ['app', 'formation', 'dynos'],
+    'Add-ons': ['app', 'addons', 'attachments'], Config: [],
+    Settings: ['app', 'domains', 'buildpacks'], Releases: ['app', 'releases'], Metrics: ['app', 'formation', 'dynos'],
+  }
+  return (required[tab] ?? []).filter(section => data.pending?.includes(section))
+}
+
 export function sortApps(apps) {
   return [...apps].sort((a, b) => (STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage)) || a.name.localeCompare(b.name))
 }
@@ -34,6 +43,8 @@ export function operationalMetrics(data) {
 }
 
 export function appRows(tab, data, {config, configError, revealed = new Set(), resources, metrics} = {}) {
+  const pending = pendingSections(tab, data)
+  if (pending.length) return [row(`Loading ${tab.toLowerCase()}…`, `Waiting for ${pending.join(', ')}.\n\nOther views remain available while these sections load.`, {icon: 'refresh', tone: 'info'})]
   const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
   const rows = []
   const noticeColumns = (label, status) => TABLE_COLUMNS[tab]?.map((column, index) => index === 0 ? label : /State|Status/.test(column.label) ? status : '—')
@@ -198,7 +209,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
         {id: `health:${f.type}`, processType: f.type, icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
           columns: [f.type, f.quantity, errors.dynos ? '—' : running, status]}))
     }
-    if (!errors.releases) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,
+    if (!errors.releases && !data.pending?.includes('releases')) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,
       `Latest ${releases.length} releases (up to 20).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {id: 'releases', icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
         columns: ['Releases OK', releases.length, releases.filter(r => r.status === 'succeeded').length, !releases.length ? 'No releases' : releases.some(r => r.status === 'failed') ? `${releases.filter(r => r.status === 'failed').length} failed` : 'Succeeded']}))
     rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, `Platform snapshot: ${data.fetchedAt}\n\nPerformance rows use separate time-bucketed data from api.metrics.heroku.com.\nSelect a metric for its sample time, resolution, coverage, and sparkline.\nPress R to refresh, or o to open the metrics dashboard.`, {id: 'snapshot', icon: 'clock', tone: 'muted',

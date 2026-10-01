@@ -181,6 +181,113 @@ test('pipeline completion preserves pane focus changed while loading', async t =
   assert.equal(screen.focused, d.nav)
 })
 
+async function progressiveApp(t, override = {}) {
+  const demo = createDemo()
+  const app = demo.catalog.apps[0]
+  const appData = demo.api.appData.bind(demo.api)
+  const snapshot = await appData(app.id)
+  const sections = {app: '', coupling: '/pipeline-couplings', formation: '/formation', dynos: '/dynos',
+    addons: '/addons', attachments: '/addon-attachments', domains: '/domains', buildpacks: '/buildpack-installations', releases: '/releases'}
+  const gates = Object.fromEntries(Object.keys(sections).map(section => [section, Promise.withResolvers()]))
+  demo.api.client.request = path => {
+    const section = Object.keys(sections).find(section => path === `/apps/${app.id}${sections[section]}`)
+    assert.ok(section, `Unexpected request: ${path}`)
+    return gates[section].promise.then(body => ({body}))
+  }
+  delete demo.api.appData
+  const ui = await harness(t, {...demo, ...override})
+  const loading = ui.dashboard.openApp(app)
+  return {...ui, gates, snapshot, loading, appData,
+    async settle(...sections) {
+      for (const section of sections) gates[section].resolve(snapshot[section])
+      await new Promise(resolve => setImmediate(resolve))
+    },
+    async finish() {
+      for (const [section, gate] of Object.entries(gates)) gate.resolve(snapshot[section])
+      await loading
+    },
+  }
+}
+
+test('ready app panes render before unrelated sections finish, with pending sections visibly loading', async t => {
+  const p = await progressiveApp(t)
+  const {dashboard: d, gates, key, screen} = p
+  await p.settle('app', 'coupling')
+  assert.match(clean(d.summary.content), /Loading dynos/)
+  assert.match(clean(d.summary.content), /Loading add-ons/)
+  await key('2')
+  await p.settle('formation')
+  assert.match(d.rows[0].label, /Loading resources/)
+  await p.settle('dynos')
+  assert.ok(d.rows.some(row => row.kind === 'formation'))
+  assert.equal(d.loading.has('app'), true)
+  assert.ok(d.data.pending.includes('releases'))
+  await key('3')
+  assert.match(d.rows[0].label, /Loading add-ons/)
+  await p.settle('addons', 'attachments')
+  assert.ok(d.rows.some(row => row.kind === 'addon'))
+  await key('5')
+  assert.match(d.rows[0].label, /Loading settings/)
+  gates.domains.reject(new Error('Domains lookup failed'))
+  await p.settle('buildpacks')
+  assert.ok(d.rows.some(row => /domains unavailable/.test(row.label)))
+  await key('6')
+  assert.match(d.rows[0].label, /Loading releases/)
+  await key('\t')
+  const focus = screen.focused
+  await p.finish()
+  assert.ok(d.rows.some(row => /v\d/.test(row.label)))
+  assert.equal(screen.focused, focus)
+  assert.equal(d.loading.has('app'), false)
+  assert.deepEqual(d.data.pending, [])
+})
+
+test('progressive snapshots start enrichment and metrics only when ready without repeating them on completion', async t => {
+  let resourceReads = 0
+  let metricsReads = 0
+  const p = await progressiveApp(t, {
+    resources: {available: true, async dynos() { resourceReads++; return {} }},
+    async fetchMetrics(data) { metricsReads++; return demoTelemetry(data) },
+  })
+  const {dashboard: d, key} = p
+  await key('2')
+  await p.settle('app', 'formation')
+  assert.equal(resourceReads, 0)
+  await p.settle('dynos')
+  assert.equal(resourceReads, 1)
+  const snapshot = d.data
+  d.main.select(1)
+  const selected = d.rows[d.main.selected].id
+  await p.settle('addons', 'attachments')
+  assert.equal(d.rows[d.main.selected].id, selected)
+  assert.equal(d.data, snapshot)
+  await key('7')
+  assert.equal(metricsReads, 1)
+  assert.ok(!d.rows.some(row => row.id === 'releases'))
+  await p.finish()
+  assert.equal(resourceReads, 1)
+  assert.equal(metricsReads, 1)
+  assert.ok(d.rows.some(row => row.id === 'releases'))
+})
+
+test('navigating away from a progressive snapshot cancels pending sections and ignores late updates', async t => {
+  const p = await progressiveApp(t)
+  const {dashboard: d, gates} = p
+  await p.settle('app', 'formation', 'dynos')
+  const old = d.data
+  d.api.appData = p.appData
+  await d.openApp(d.catalog.apps[1])
+  await p.loading
+  const current = d.data
+  const message = d.message
+  gates.releases.reject(new Error('Old releases failed'))
+  await p.finish()
+  assert.notEqual(current, old)
+  assert.equal(d.data, current)
+  assert.equal(d.app.id, d.catalog.apps[1].id)
+  assert.equal(d.message, message)
+})
+
 test('partial pipeline loads show unavailable rows while accessible apps still open and retries recover', async t => {
   const demo = createDemo()
   const apps = await demo.api.pipelineApps()

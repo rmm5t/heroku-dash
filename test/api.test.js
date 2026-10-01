@@ -5,6 +5,57 @@ import test from 'node:test'
 import {HTTP} from '@heroku/http-call'
 import {errorMessage, HerokuAPI, normalizeHostname} from '../src/api.js'
 
+test('app data publishes independent section snapshots while retaining the complete snapshot API', async () => {
+  const releases = Promise.withResolvers()
+  const addons = Promise.withResolvers()
+  const updates = []
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(options.onUpdate, undefined)
+    if (path === '/apps/app') return {body: {id: 'app', name: 'example'}}
+    if (path.endsWith('/releases')) return {body: await releases.promise}
+    if (path.endsWith('/addons')) return {body: await addons.promise}
+    if (path.endsWith('/buildpack-installations')) throw new Error('Buildpacks unavailable')
+    return {body: []}
+  }})
+  const loading = api.appData('app', {onUpdate: (snapshot, section) => updates.push({snapshot, section})})
+  await new Promise(resolve => setImmediate(resolve))
+  const early = updates.at(-1).snapshot
+  assert.deepEqual(early.pending, ['addons', 'releases'])
+  assert.equal(early.app.id, 'app')
+  assert.match(early.errors.buildpacks, /Buildpacks unavailable/)
+  assert.deepEqual(early.addons, [])
+  addons.resolve([{id: 'addon'}])
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(updates.at(-1).snapshot.pending, ['releases'])
+  assert.deepEqual(early.pending, ['addons', 'releases'])
+  assert.deepEqual(early.addons, [])
+  releases.resolve([])
+  const complete = await loading
+  assert.equal(updates.length, 9)
+  assert.deepEqual(updates.at(-1).snapshot.pending, [])
+  assert.deepEqual(complete.addons, [{id: 'addon'}])
+  assert.deepEqual(complete.releases, [])
+  assert.match(complete.errors.buildpacks, /Buildpacks unavailable/)
+})
+
+test('canceling a progressive app read prevents further section notifications', async () => {
+  const late = Promise.withResolvers()
+  const updates = []
+  const controller = new AbortController()
+  const api = new HerokuAPI({async request(path) {
+    if (path === '/apps/app') return {body: {id: 'app', name: 'example'}}
+    return {body: await late.promise}
+  }})
+  const loading = api.appData('app', {signal: controller.signal, onUpdate: snapshot => updates.push(snapshot)})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(updates.length, 1)
+  controller.abort()
+  await assert.rejects(loading, {name: 'AbortError'})
+  late.reject(new Error('Late transport failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(updates.length, 1)
+})
+
 test('list follows Next-Range and preserves headers', async () => {
   const calls = []
   const api = new HerokuAPI({async request(path, options) {
