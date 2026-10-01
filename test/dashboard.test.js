@@ -66,6 +66,121 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.tab, 6)
 })
 
+test('app views and pane focus remain responsive while app data loads, and Config loads independently', async t => {
+  const {dashboard: d, screen, key, click} = await harness(t)
+  const app = d.rows[0].value
+  const data = await d.api.appData(app.id)
+  let resolve
+  d.api.appData = () => new Promise(done => { resolve = done })
+  let configReads = 0
+  d.api.config = async () => { configReads++; return {READY: 'loaded'} }
+  const loading = d.openApp(app)
+  assert.equal(d.busy, false)
+  assert.equal(d.data, null)
+  await key('2')
+  assert.match(clean(d.main._label.content), /Resources/)
+  assert.match(d.rows[0].label, /Loading resources/)
+  await key('l')
+  assert.match(clean(d.main._label.content), /Add-ons/)
+  await click(...tabCell(d, screen, 4))
+  assert.match(d.rows[0].label, /Loading settings/)
+  await key('7')
+  await key('T')
+  assert.equal(d.metricsWindowHours, 24)
+  await key('4')
+  assert.equal(configReads, 1)
+  assert.equal(d.data, null)
+  assert.equal(d.rows[0].key, 'READY')
+  await key('v')
+  assert.match(clean(d.detail.content), /loaded/)
+  await key('\t')
+  assert.equal(screen.focused, d.detail)
+  await key('\t')
+  assert.equal(screen.focused, d.nav)
+  resolve(data)
+  await loading
+  assert.equal(d.tab, 3)
+  assert.equal(configReads, 1)
+  assert.equal(d.rows[0].key, 'READY')
+  assert.equal(screen.focused, d.nav)
+})
+
+test('opening on Config starts its read alongside app data rather than waiting for the snapshot', async t => {
+  const {dashboard: d, key} = await harness(t)
+  await key('\r')
+  await key('4')
+  const app = d.catalog.apps.find(app => app.id !== d.app.id)
+  const data = await d.api.appData(app.id)
+  let resolve
+  d.api.appData = () => new Promise(done => { resolve = done })
+  let configReads = 0
+  d.api.config = async id => { configReads++; assert.equal(id, app.id); return {DESTINATION: 'new app'} }
+  const loading = d.openApp(app)
+  await delay(0)
+  assert.equal(configReads, 1)
+  assert.equal(d.data, null)
+  assert.equal(d.rows[0].key, 'DESTINATION')
+  assert.equal(d.revealed.size, 0)
+  resolve(data)
+  await loading
+  assert.equal(configReads, 1)
+})
+
+test('an app snapshot failure keeps independent Config results usable and other tabs show the error', async t => {
+  const {dashboard: d, key} = await harness(t)
+  d.tab = 3
+  d.api.appData = async () => { throw new Error('App lookup failed') }
+  d.api.config = async () => ({AVAILABLE: 'value'})
+  await d.openApp(d.rows[0].value)
+  assert.equal(d.rows[0].key, 'AVAILABLE')
+  await key('2')
+  assert.equal(d.rows[0].label, 'Unable to load app')
+  assert.match(d.rows[0].detail, /App lookup failed/)
+  await key('4')
+  assert.equal(d.rows[0].key, 'AVAILABLE')
+})
+
+test('slow breadcrumb reads do not delay app panes and are canceled when navigating away', async t => {
+  const {dashboard: d, key} = await harness(t)
+  const app = d.rows[0].value
+  const data = await d.api.appData(app.id)
+  data.app = {...data.app, team: null}
+  data.coupling = {pipeline: {id: 'slow-parent', name: 'Slow parent'}}
+  d.api.appData = async () => data
+  let resolve
+  let signal
+  d.api.get = (path, options) => {
+    assert.equal(path, '/pipelines/slow-parent')
+    signal = options.signal
+    return new Promise(done => { resolve = done })
+  }
+  await d.openApp(app)
+  assert.equal(d.data, data)
+  assert.equal(d.loading.has('app'), false)
+  assert.equal(d.readRequests.has('hierarchy'), true)
+  await key('2')
+  assert.ok(d.rows.some(row => row.kind === 'formation'))
+  await d.openPipeline(d.catalog.pipelines[0])
+  assert.equal(signal.aborted, true)
+  resolve({id: 'slow-parent', name: 'Late parent', owner: {type: 'user', id: 'owner'}})
+  await delay(0)
+  assert.equal(d.pipeline.id, d.catalog.pipelines[0].id)
+  assert.equal(d.app, null)
+})
+
+test('pipeline completion preserves pane focus changed while loading', async t => {
+  const {dashboard: d, screen, key} = await harness(t)
+  const apps = await d.api.pipelineApps()
+  let resolve
+  d.api.pipelineApps = () => new Promise(done => { resolve = done })
+  const loading = d.openPipeline(d.pipeline)
+  await key('a')
+  assert.equal(screen.focused, d.nav)
+  resolve(apps)
+  await loading
+  assert.equal(screen.focused, d.nav)
+})
+
 test('partial pipeline loads show unavailable rows while accessible apps still open and retries recover', async t => {
   const demo = createDemo()
   const apps = await demo.api.pipelineApps()
@@ -252,7 +367,9 @@ test('an obsolete app refresh cannot start a config read in the newly selected a
   const refreshing = d.reload()
   const opening = d.openApp(d.catalog.apps[1])
   await refreshing
-  assert.deepEqual(configCalls, [])
+  // The new app starts its own Config read immediately; the canceled refresh
+  // must not start a second one in the new context.
+  assert.deepEqual(configCalls, [d.catalog.apps[1].id])
   next.resolve(nextData)
   await opening
   assert.deepEqual(configCalls, [d.catalog.apps[1].id])

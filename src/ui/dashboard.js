@@ -341,7 +341,7 @@ export class Dashboard {
   autoRefresh() {
     if (!this.app || this.closed) return
     if (!this.terminalFocused) { this.refreshPending = true; return }
-    if (this.modal || this.busy) return
+    if (this.modal || this.busy || this.readRequests.has('app')) return
     this.refreshPending = false
     void this.loadApp(true)
   }
@@ -478,6 +478,7 @@ export class Dashboard {
     this.app = null
     this.breadcrumbTeam = null
     this.data = null
+    this.appError = null
     this.config = null
     this.configError = null
     this.revealed.clear()
@@ -497,10 +498,10 @@ export class Dashboard {
     this.breadcrumbTeam = owner?.type === 'team' ? this.catalog.teams.find(item => item.id === owner.id) ?? null : owner ? {name: 'Personal'} : null
     const request = this.readRequests.start('pipeline')
     const {signal} = request.controller
-    this.busy = true
     this.summary.setContent(`${badge('pipelines', pipeline.name)}\n\n${badge('refresh', 'Loading pipeline apps…', 'info')}`)
     this.main.setLabel(` ${icons.apps}  Pipeline apps `)
     this.setRows([])
+    this.main.focus()
     const finishLoading = this.beginLoading('pipeline', `Loading pipeline ${pipeline.name}…`)
     try {
       const [appsResult, hierarchy] = await withAbort(Promise.all([
@@ -525,7 +526,6 @@ export class Dashboard {
         columns: [app.stage.toUpperCase(), app.name, app.region?.name, app.stack?.name], columnLayout: 'Pipeline apps',
         detail: `${single(app.name)}\n\nStage: ${app.stage}\nTeam: ${single(app.team?.name ?? 'Personal / shared')}\nRegion: ${single(app.region?.name)}\nStack: ${single(app.stack?.name)}\n\nEnter to view resources, add-ons, config, settings, releases, and metrics.\nP to promote the latest release to a higher stage.`,
       })) : [{icon: 'apps', tone: 'muted', label: 'This pipeline has no apps', detail: 'Press A to create an app in this pipeline, or a to browse accessible apps.'}])
-      this.main.focus()
       this.message = `Pipeline loaded. Select an app and press Enter, or press A to add an app.${unavailable ? ` · ${unavailable} app${unavailable === 1 ? '' : 's'} unavailable; select their rows for details.` : ''}${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
       this.messageTone = unavailable || hierarchy.errors.hierarchy ? 'warning' : 'success'
     } catch (error) {
@@ -535,7 +535,7 @@ export class Dashboard {
         this.messageTone = 'error'
       }
     } finally {
-      if (request.current()) { this.busy = false; this.render() }
+      if (request.current()) this.render()
       request.finish()
       finishLoading()
     }
@@ -543,18 +543,14 @@ export class Dashboard {
 
   async openApp(app, pipeline = null) {
     this.clearApp()
-    const generation = this.generation
     this.app = app
     this.pipeline = pipeline
     this.breadcrumbTeam = app.team ?? null
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}\n\n${badge('refresh', 'Loading app data…', 'info')}`)
-    this.main.setLabel(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]} `)
-    this.setRows([])
+    this.drawApp()
     this.main.focus()
-    const loaded = await this.loadApp()
-    if (loaded && !this.closed && generation === this.generation && TABS[this.tab] === 'Config' && !this.config && !this.loading.has('config')) {
-      await this.loadConfig()
-    }
+    const config = TABS[this.tab] === 'Config' ? this.loadConfig() : null
+    await Promise.all([this.loadApp(), config])
   }
 
   async loadApp(automatic = false, {forceResources = false} = {}) {
@@ -563,16 +559,12 @@ export class Dashboard {
     const request = this.readRequests.start('app')
     const {signal} = request.controller
     const app = this.app
-    this.busy = true
     const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…`)
     try {
       const data = await withAbort(this.api.appData(app.id, {signal}), signal)
       if (!request.current()) return
-      const hierarchy = await withAbort(resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline, signal}), signal)
-      if (!request.current()) return
-      this.pipeline = hierarchy.pipeline
-      this.breadcrumbTeam = hierarchy.team
-      Object.assign(data.errors, hierarchy.errors)
+      this.pipeline = data.coupling?.pipeline ?? null
+      this.breadcrumbTeam = data.app.team ?? null
       this.resetResourceDetails()
       this.data = data
       this.app = data.app
@@ -580,6 +572,7 @@ export class Dashboard {
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
       this.messageTone = Object.keys(data.errors).length ? 'warning' : 'success'
       this.drawApp({preserveScroll: automatic && TABS[this.tab] === 'Metrics'})
+      void this.loadAppHierarchy(data)
       void this.loadResourceDetails({force: forceResources})
       void this.loadMetrics({refresh: true, force: !automatic})
       return true
@@ -587,22 +580,55 @@ export class Dashboard {
       if (request.current()) {
         this.message = `${errorMessage(error)}${this.data ? ' · Showing previous snapshot.' : ''}`
         this.messageTone = 'error'
-        if (!this.data) this.setRows([{icon: 'error', tone: 'error', label: 'Unable to load app', detail: errorMessage(error)}])
+        if (!this.data) {
+          this.appError = errorMessage(error)
+          this.drawApp()
+        }
       }
       return false
     } finally {
-      if (request.current()) { this.busy = false; this.render() }
+      if (request.current()) this.render()
       request.finish()
       finishLoading()
     }
   }
 
+  async loadAppHierarchy(data) {
+    const request = this.readRequests.start('hierarchy', () => this.data === data)
+    const {signal} = request.controller
+    try {
+      const hierarchy = await withAbort(resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline, signal}), signal)
+      if (!request.current()) return
+      this.pipeline = hierarchy.pipeline
+      this.breadcrumbTeam = hierarchy.team
+      Object.assign(data.errors, hierarchy.errors)
+      if (hierarchy.errors.hierarchy) {
+        this.message = `${this.message} · ${hierarchy.errors.hierarchy}`
+        this.messageTone = 'warning'
+        this.drawApp({preserveScroll: true})
+      } else this.render()
+    } catch (error) {
+      if (request.current()) {
+        data.errors.hierarchy = errorMessage(error)
+        this.drawApp({preserveScroll: true})
+      }
+    } finally { request.finish() }
+  }
+
   drawApp({preserveScroll = false} = {}) {
-    if (!this.data) return
+    if (!this.app) return
+    const tab = TABS[this.tab]
+    this.main.setLabel(highlightKeys(` ${icons[tabIcons[this.tab]]}  ${tab}${tab === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `))
+    if (!this.data) {
+      this.setRows(tab === 'Config' ? appRows(tab, {app: this.app, errors: {}}, {
+        config: this.config, configError: this.configError, revealed: this.revealed,
+      }) : this.appError ? [{icon: 'error', tone: 'error', label: 'Unable to load app', detail: this.appError}] : [{icon: 'refresh', tone: 'info', label: `Loading ${tab.toLowerCase()}…`,
+        detail: `Loading ${tab.toLowerCase()} for ${single(this.app.name)}.\n\nYou can switch views, move between panes with Tab, or open another app while loading.`}], true)
+      return
+    }
     const scroll = this.detail.childBase
     const {app, formation, errors} = this.data
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', `${this.data.addons.length} add-ons`, 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
-    this.main.setLabel(highlightKeys(` ${icons[tabIcons[this.tab]]}  ${TABS[this.tab]}${TABS[this.tab] === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `))
     this.setRows(appRows(TABS[this.tab], this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
@@ -811,7 +837,7 @@ export class Dashboard {
   }
 
   async reload() {
-    if (this.busy || this.closed) return
+    if (this.busy || this.closed || this.readRequests.has('app') || this.readRequests.has('pipeline')) return
     if (this.app) {
       const generation = this.generation
       const appId = this.app.id
@@ -880,7 +906,7 @@ export class Dashboard {
 
   writable() {
     if (this.api.readOnly) { this.setStatus('Read-only mode: remote changes are disabled.', 'warning'); return false }
-    if (!this.app || !this.data || this.busy) return false
+    if (!this.app || !this.data || this.busy || this.readRequests.has('app')) return false
     return true
   }
 
@@ -924,7 +950,7 @@ export class Dashboard {
   }
 
   async addApp() {
-    if (!this.pipeline || this.app || this.busy) return
+    if (!this.pipeline || this.app || this.busy || this.readRequests.has('pipeline')) return
     if (this.demo) { this.setStatus('App creation is disabled in the offline demo.', 'warning'); return }
     if (this.api.readOnly) { this.setStatus('Read-only mode: app creation is disabled.', 'warning'); return }
     let pipeline = this.pipeline
@@ -994,7 +1020,7 @@ export class Dashboard {
   }
 
   async promoteApp() {
-    if (!this.pipeline || this.busy) return
+    if (!this.pipeline || this.busy || this.readRequests.has('pipeline') || this.readRequests.has('app')) return
     const selected = this.app ?? this.rows[this.main.selected]?.value
     if (!selected?.id || (!this.app && this.rows[this.main.selected]?.kind !== 'app')) return
     if (this.demo) { this.setStatus('App promotion is disabled in the offline demo.', 'warning'); return }

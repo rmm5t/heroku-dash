@@ -112,6 +112,8 @@ Switching apps keeps the selected tab, so moving from Metrics on one app opens M
 
 Navigating to another app or pipeline, replacing a pending read, or closing Dash cancels obsolete reads. Late results and errors cannot overwrite the active view or its status. Shared dyno-size lookups continue while another view still needs them.
 
+Navigation remains available while app data loads: switch tabs, move between panes, or open another app. Pending tabs show a loading state, and completed reads preserve your pane focus. Config loads independently as soon as you select it; app panes do not wait for team and pipeline breadcrumb lookups.
+
 Single-click a tab's number, icon, or label to switch views and focus the resource list. This also works with compact tabs in narrow terminals. Clicking the active tab keeps the current selection and revealed config values.
 
 Overview, Resources, Add-ons, Settings, and Metrics use aligned tables with fixed column headers and right-aligned quantities. Columns adapt to the terminal width; narrow layouts hide the Resources age and Add-ons service columns. Full values, including shortened names and hidden columns, remain available in Details.
