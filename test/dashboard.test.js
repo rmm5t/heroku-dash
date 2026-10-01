@@ -2298,6 +2298,53 @@ test('L tails app-scoped logs in read-only mode with pause, scrolling, filtering
   assert.equal(d.message, 'Log viewer closed.')
 })
 
+test('log filters accept regexes directly and literal brackets without interrupting the stream', async t => {
+  const execution = Promise.withResolvers()
+  let options
+  const {dashboard: d, screen, key} = await harness(t, {demo: false,
+    executeHeroku: (_args, value) => { options = value; return execution.promise }})
+  await d.openApp(d.rows[0].value)
+  const running = d.openLogs()
+  options.onOutput('\x1b[31mERROR status=500\x1b[0m\nWARN status=404\nINFO status=200\napp[web.1] ready\n')
+  await delay(125)
+  await key('/')
+  await key('status=5\\d{2}')
+  await key('\r')
+  const output = d.logRequest.output
+  assert.equal(output.content, '\x1b[31mERROR status=500\x1b[0m')
+  await key('/')
+  await key('\x15')
+  await key('[')
+  await key('\r')
+  assert.equal(screen.focused, output)
+  assert.equal(screen.grabKeys, false)
+  assert.equal(output.content, 'app[web.1] ready')
+  assert.equal(options.signal.aborted, false)
+  options.onOutput('app[web.2] ready\n')
+  await delay(125)
+  assert.match(output.content, /web\.2/)
+  await key('/')
+  await key('\x15')
+  await key('error|warn')
+  await key('\r')
+  assert.equal(screen.focused, output)
+  assert.equal(screen.grabKeys, false)
+  assert.match(output.content, /\x1b\[31mERROR status=500\x1b\[0m/)
+  assert.match(output.content, /WARN/)
+  assert.ok(!output.content.includes('INFO'))
+  await key('/')
+  await key('\x15')
+  await key('(')
+  await key('\x1b')
+  assert.ok(d.logRequest)
+  assert.equal(screen.focused, output)
+  assert.ok(!d.modal.children.map(child => clean(child.content)).join('\n').includes('Invalid regex'))
+  assert.match(output.content, /WARN/)
+  await key('q')
+  await running
+  assert.equal(options.signal.aborted, true)
+})
+
 test('log streams and filter editors are cleaned up on app or pipeline navigation and Ctrl-C', async t => {
   for (const destination of ['app', 'pipeline', 'exit']) {
     const execution = Promise.withResolvers()

@@ -35,6 +35,54 @@ test('log colors survive fragmented output, filtering, and pause without matchin
   assert.equal(buffer.content, '\x1b[38;2;10;20;30mnormal\x1b[0m')
 })
 
+test('regex log filters support anchors, alternation, and character classes on visible text', () => {
+  const buffer = new LogBuffer()
+  buffer.append('\x1b[31mER\x1b[1mROR status=500 app[web.1]\x1b[0m\nWARN status=404 app[worker.1]\nINFO status=200 app[web.2]\n')
+  buffer.filter = '^(error|warn)'
+  const matching = '\x1b[31mER\x1b[1mROR status=500 app[web.1]\x1b[0m\nWARN status=404 app[worker.1]'
+  assert.equal(buffer.content, matching)
+  assert.equal(buffer.content, matching, 'Repeated reads must not alternate matches')
+  buffer.filter = 'status=5\\d{2}\\b'
+  assert.match(buffer.content, /status=500/)
+  assert.ok(!buffer.content.includes('status=404'))
+  buffer.filter = 'app\\[web\\.\\d+\\]$'
+  assert.match(buffer.content, /status=500/)
+  assert.match(buffer.content, /status=200/)
+  assert.ok(!buffer.content.includes('worker'))
+  buffer.filter = '31m'
+  assert.equal(buffer.content, '')
+  buffer.filter = 'app[web.1]'
+  assert.match(buffer.content, /status=500/)
+  buffer.filter = ''
+  assert.match(buffer.content, /worker/)
+})
+
+test('regex matching works directly with paused snapshots and invalid regex syntax matches literally', () => {
+  const buffer = new LogBuffer()
+  buffer.append('error old\ninfo old\n')
+  buffer.filter = '^error'
+  buffer.pause()
+  buffer.append('error new\n')
+  assert.equal(buffer.content, 'error old')
+  buffer.resume()
+  assert.equal(buffer.content, 'error old\nerror new')
+  buffer.append('literal [ and ( characters\n')
+  buffer.filter = '['
+  assert.equal(buffer.content, 'literal [ and ( characters')
+  buffer.filter = '('
+  assert.equal(buffer.content, 'literal [ and ( characters')
+  buffer.clear()
+  buffer.append('info after clearing\n')
+  assert.equal(buffer.content, 'info after clearing\n')
+})
+
+test('valid regex metacharacters also remain usable as literal matching strings', () => {
+  const buffer = new LogBuffer()
+  buffer.append('literal app[web.1]\nregex appw\nunrelated worker\n')
+  buffer.filter = 'app[web.1]'
+  assert.equal(buffer.content, 'literal app[web.1]\nregex appw')
+})
+
 test('log buffering bounds both record count and long unterminated lines', () => {
   const buffer = new LogBuffer({lines: 3, characters: 50})
   buffer.append('one\ntwo\nthree\nfour\n')
