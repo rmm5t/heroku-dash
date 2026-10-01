@@ -2,6 +2,7 @@ import {setTimeout as delay} from 'node:timers/promises'
 import {isIP} from 'node:net'
 import {domainToASCII} from 'node:url'
 import {withAbort} from './read-requests.js'
+import {recentReleases, RELEASE_LIMIT} from './releases.js'
 
 const V3 = 'application/vnd.heroku+json; version=3'
 const encode = encodeURIComponent
@@ -169,8 +170,9 @@ export class HerokuAPI {
       attachments: () => this.list(`${base}/addon-attachments`, requestOptions),
       domains: () => this.list(`${base}/domains`, requestOptions),
       buildpacks: () => this.list(`${base}/buildpack-installations`, requestOptions),
-      // Only the latest page: release histories can be enormous.
-      releases: () => this.get(`${base}/releases`, {...requestOptions, headers: {...requestOptions.headers, Range: 'version ..; order=desc,max=20;'}}),
+      // http-call automatically follows Next-Range unless partial is enabled.
+      releases: () => this.get(`${base}/releases`, {...requestOptions, partial: true,
+        headers: {...requestOptions.headers, Range: `version ..; order=desc,max=${RELEASE_LIMIT};`}}).then(recentReleases),
     }
     const selected = requested ?? Object.keys(sections)
     if (!Array.isArray(selected) || selected.some(key => !Object.hasOwn(sections, key))) throw new Error('Choose known app data sections.')
@@ -181,6 +183,7 @@ export class HerokuAPI {
       ...previous, errors: {...previous?.errors}, failures: {...previous?.failures},
       sectionFetchedAt: {...previous?.sectionFetchedAt}, fetchedAt: new Date().toISOString(),
     }
+    data.releases = recentReleases(data.releases)
     await Promise.all([...pending].map(async key => {
       try {
         data[key] = await sections[key]()

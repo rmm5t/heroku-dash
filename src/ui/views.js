@@ -3,6 +3,7 @@ import {stateStyle} from './theme.js'
 import {addonDetails, dynoDetails} from './resource-details.js'
 import {TABLE_COLUMNS} from './columns.js'
 import {telemetryRows} from './telemetry.js'
+import {recentReleases, RELEASE_LIMIT} from '../releases.js'
 
 export {ansi, clean, single} from './text.js'
 export function age(date, now = Date.now()) {
@@ -45,7 +46,8 @@ export function operationalMetrics(data) {
 export function appRows(tab, data, {config, configError, revealed = new Set(), resources, metrics} = {}) {
   const pending = pendingSections(tab, data)
   if (pending.length) return [row(`Loading ${tab.toLowerCase()}…`, `Waiting for ${pending.join(', ')}.\n\nOther views remain available while these sections load.`, {icon: 'refresh', tone: 'info'})]
-  const {app, formation, dynos, addons, attachments, releases, domains, buildpacks, errors} = data
+  const {app, formation, dynos, addons, attachments, domains, buildpacks, errors} = data
+  const releases = recentReleases(data.releases)
   const rows = []
   const noticeColumns = (label, status) => TABLE_COLUMNS[tab]?.map((column, index) => index === 0 ? label : /State|Status/.test(column.label) ? status : '—')
   const error = section => {
@@ -210,7 +212,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
           columns: [f.type, f.quantity, errors.dynos ? '—' : running, status]}))
     }
     if (!errors.releases && !data.pending?.includes('releases')) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,
-      `Latest ${releases.length} releases (up to 20).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {id: 'releases', icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
+      `Latest ${releases.length} releases (up to ${RELEASE_LIMIT}).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {id: 'releases', icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
         columns: ['Releases OK', releases.length, releases.filter(r => r.status === 'succeeded').length, !releases.length ? 'No releases' : releases.some(r => r.status === 'failed') ? `${releases.filter(r => r.status === 'failed').length} failed` : 'Succeeded']}))
     rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, `Platform snapshot: ${data.fetchedAt}\n\nPerformance rows use separate time-bucketed data from api.metrics.heroku.com.\nSelect a metric for its sample time, resolution, coverage, and sparkline.\nPress R to refresh, or o to open the metrics dashboard.`, {id: 'snapshot', icon: 'clock', tone: 'muted',
       columns: ['Snapshot', '—', new Date(data.fetchedAt).toLocaleTimeString(), 'Fetched']}))

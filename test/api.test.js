@@ -96,6 +96,54 @@ test('Retry-After supports seconds and HTTP dates, and app lookup failures retai
   await assert.rejects(api.appData('app'), error => error.statusCode === 429 && error.retryAfterMs === 90_000)
 })
 
+test('release reads stop the real HTTP transport at the newest page instead of following Next-Range', {timeout: 2000}, async t => {
+  const calls = []
+  const releases = Array.from({length: 100}, (_, index) => ({version: 400 - index}))
+  const server = createServer((request, response) => {
+    calls.push({path: request.url, range: request.headers.range})
+    response.writeHead(calls.length === 1 ? 206 : 200, {'content-type': 'application/json',
+      ...(calls.length === 1 ? {'next-range': 'version ..300; order=desc,max=100;'} : {})})
+    response.end(JSON.stringify(calls.length === 1 ? releases : [{version: 300}]))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+  })
+  const agent = new Agent()
+  t.after(() => agent.destroy())
+  const Transport = HTTP.create({host: '127.0.0.1', port: server.address().port, protocol: 'http:'})
+  const api = new HerokuAPI({http: Transport}, {readOnly: true})
+  const data = await api.appData('app', {previous: {app: {id: 'app'}}, sections: ['releases'], partial: false, agent})
+  assert.deepEqual(calls, [{path: '/apps/app/releases', range: 'version ..; order=desc,max=100;'}])
+  assert.deepEqual(data.releases, releases)
+  assert.equal(data.errors.releases, undefined)
+})
+
+test('oversized release responses and retained snapshots are capped newest-first without mutating previous data', async () => {
+  const releases = Array.from({length: 350}, (_, index) => ({version: index + 1}))
+  let unavailable = false
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(path, '/apps/app/releases')
+    assert.equal(options.partial, true)
+    if (unavailable) throw new Error('Releases unavailable')
+    return {body: releases}
+  }})
+  const previous = {app: {id: 'app'}, releases}
+  const updates = []
+  const data = await api.appData('app', {previous, sections: ['releases'], onUpdate: snapshot => updates.push(snapshot)})
+  assert.equal(data.releases.length, 100)
+  assert.equal(data.releases[0].version, 350)
+  assert.equal(data.releases.at(-1).version, 251)
+  assert.deepEqual(updates[0].releases, data.releases)
+  assert.equal(previous.releases.length, 350)
+  assert.equal(previous.releases[0].version, 1)
+  unavailable = true
+  const stale = await api.appData('app', {previous, sections: ['releases']})
+  assert.deepEqual(stale.releases, data.releases)
+  assert.match(stale.errors.releases, /Showing previous data/)
+})
+
 test('list follows Next-Range and preserves headers', async () => {
   const calls = []
   const api = new HerokuAPI({async request(path, options) {
@@ -712,7 +760,8 @@ test('app sections fail independently and config is fetched lazily', async () =>
   assert.match(data.errors.addons, /permission/)
   assert.deepEqual(data.dynos, [])
   assert.ok(!calls.some(c => c.path.endsWith('/config-vars')))
-  assert.equal(calls.find(c => c.path.endsWith('/releases')).options.headers.Range, 'version ..; order=desc,max=20;')
+  assert.equal(calls.find(c => c.path.endsWith('/releases')).options.headers.Range, 'version ..; order=desc,max=100;')
+  assert.equal(calls.find(c => c.path.endsWith('/releases')).options.partial, true)
 })
 
 test('coupling only treats 404 as an app without a pipeline', async () => {
