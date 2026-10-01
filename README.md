@@ -116,6 +116,8 @@ Navigation remains available while app data loads: switch tabs, move between pan
 
 App sections load in parallel and panes render as soon as their required sections finish. A slow releases, domains, or buildpacks lookup does not hold up Resources or Add-ons. Pending data is shown as loading rather than empty or zero, and costs and performance metrics can start loading before the rest of the app snapshot completes. Refreshes retain the previous snapshot until the new one finishes.
 
+Revisiting an app immediately displays its last completed snapshot, labeled with its age, while a fresh snapshot loads in the background. This session-only cache holds up to eight apps for one minute and evicts the least recently visited app when full. Config values and revealed state are never cached across app switches. Confirmed changes invalidate the affected snapshots, including promotion destinations and apps targeted by custom CLI commands; quitting clears the cache.
+
 Single-click a tab's number, icon, or label to switch views and focus the resource list. This also works with compact tabs in narrow terminals. Clicking the active tab keeps the current selection and revealed config values.
 
 Overview, Resources, Add-ons, Settings, and Metrics use aligned tables with fixed column headers and right-aligned quantities. Columns adapt to the terminal width; narrow layouts hide the Resources age and Add-ons service columns. Full values, including shortened names and hidden columns, remain available in Details.

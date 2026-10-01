@@ -3,11 +3,12 @@ import clipboard from 'clipboardy'
 import {openExternalURL} from '../browser.js'
 import packageJSON from '../../package.json' with {type: 'json'}
 import {APP_STAGES, errorMessage, normalizeHostname, validateAppName} from '../api.js'
+import {AppSnapshotCache} from '../app-snapshot-cache.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
-import {ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
+import {age, ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
@@ -183,6 +184,8 @@ export class Dashboard {
     this.promotionRequest = null
     this.openingBrowser = false
     this.busy = false
+    this.appSnapshots = new AppSnapshotCache()
+    this.cachedSnapshot = false
     this.loading = new Map()
     this.loadingFrame = 0
     this.loadingTimer = null
@@ -478,6 +481,7 @@ export class Dashboard {
     this.app = null
     this.breadcrumbTeam = null
     this.data = null
+    this.cachedSnapshot = false
     this.appError = null
     this.config = null
     this.configError = null
@@ -547,6 +551,17 @@ export class Dashboard {
     this.pipeline = pipeline
     this.breadcrumbTeam = app.team ?? null
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}\n\n${badge('refresh', 'Loading app data…', 'info')}`)
+    const cached = this.appSnapshots.get(app.id)
+    if (cached) {
+      this.data = cached
+      this.app = cached.app
+      this.pipeline = cached.coupling?.pipeline ?? null
+      this.breadcrumbTeam = cached.app.team ?? null
+      this.cachedSnapshot = true
+      this.message = `Showing cached snapshot · ${age(cached.fetchedAt)} old. Refreshing…`
+      this.messageTone = 'muted'
+      void this.loadAppHierarchy(cached)
+    }
     this.drawApp()
     this.main.focus()
     const config = TABS[this.tab] === 'Config' ? this.loadConfig() : null
@@ -561,7 +576,7 @@ export class Dashboard {
     const app = this.app
     const initial = !this.data
     let progressive
-    const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…`)
+    const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…${this.cachedSnapshot ? ` · cached snapshot ${age(this.data.fetchedAt)} old` : ''}`)
     try {
       const data = await withAbort(this.api.appData(app.id, {signal, onUpdate: snapshot => {
         if (!initial || !request.current() || !snapshot.app) return
@@ -582,6 +597,8 @@ export class Dashboard {
       this.breadcrumbTeam = data.app.team ?? null
       if (!progressive) this.resetResourceDetails()
       this.data = progressive ? Object.assign(progressive, data, {pending: []}) : data
+      this.cachedSnapshot = false
+      this.appSnapshots.set(this.data)
       this.app = data.app
       if (this.metricsSignature && this.metricsSignature !== metricsScope(data, this.metricsWindowHours)) this.resetMetrics()
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
@@ -605,6 +622,16 @@ export class Dashboard {
       if (request.current()) this.render()
       request.finish()
       finishLoading()
+    }
+  }
+
+  invalidateAppSnapshot(id) {
+    this.appSnapshots.delete(id)
+    if (this.app?.id === id) {
+      // An already running read may predate the write. It must not repopulate
+      // the cache after invalidation, including for arbitrary CLI commands.
+      this.readRequests.cancel('app')
+      this.readRequests.cancel('hierarchy')
     }
   }
 
@@ -645,6 +672,7 @@ export class Dashboard {
     const {app, formation, errors} = this.data
     const pending = this.data.pending ?? []
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', pending.includes('formation') ? 'Loading dynos…' : errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, pending.includes('formation') ? 'info' : errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', pending.includes('addons') ? 'Loading add-ons…' : errors.addons ? 'Add-ons unavailable' : `${this.data.addons.length} add-ons`, pending.includes('addons') ? 'info' : errors.addons ? 'warning' : 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
+    if (this.cachedSnapshot) this.summary.setContent(`${this.summary.content}\n${badge('clock', `Cached snapshot · ${age(this.data.fetchedAt)} old`, 'warning')}`)
     this.setRows(appRows(TABS[this.tab], this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
@@ -1088,6 +1116,7 @@ export class Dashboard {
     this.promotionRequest = {controller}
     const finishPromotion = this.beginLoading('promotion', `Promoting ${source.name} to ${stage}…`)
     let promotion
+    for (const target of targets) this.invalidateAppSnapshot(target.id)
     try {
       promotion = await this.api.promotePipelineApp({pipeline, source, stage, targets}, confirmation)
       if (this.closed) return
@@ -1185,6 +1214,7 @@ export class Dashboard {
     this.busy = true
     this.setStatus('Applying change…')
     const finishLoading = this.beginLoading('mutation', 'Applying confirmed change…')
+    this.invalidateAppSnapshot(this.app.id)
     try {
       await action()
       if (this.closed) return
@@ -1440,6 +1470,7 @@ export class Dashboard {
   }
 
   async interactiveCommand(app, args, invocation) {
+    this.invalidateAppSnapshot(app.id)
     const previous = this.screen.focused
     const controller = new AbortController()
     const request = {controller}
@@ -1482,6 +1513,7 @@ export class Dashboard {
   }
 
   async commandPane(app, args, invocation) {
+    this.invalidateAppSnapshot(app.id)
     const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '90%', height: '85%', ...frame(),
       label: ` ${icons.code}  Heroku CLI · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
@@ -1600,6 +1632,7 @@ export class Dashboard {
     this.generation++
     this.cancelPrompt?.()
     this.config = null
+    this.appSnapshots.clear()
     if (!this.screen.destroyed) this.screen.destroy()
   }
 }

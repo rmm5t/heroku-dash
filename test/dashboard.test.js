@@ -288,6 +288,101 @@ test('navigating away from a progressive snapshot cancels pending sections and i
   assert.equal(d.message, message)
 })
 
+test('revisited apps render cached snapshots immediately and replace them with a background refresh', async t => {
+  const {dashboard: d, key} = await harness(t)
+  const [a, b] = d.catalog.apps
+  await d.openApp(a)
+  await d.openApp(b)
+  await key('2')
+  const fresh = await d.api.appData(a.id)
+  fresh.formation[0].quantity += 2
+  const pending = Promise.withResolvers()
+  let reads = 0
+  d.api.appData = async id => { reads++; assert.equal(id, a.id); return pending.promise }
+  const opening = d.openApp(a)
+  assert.equal(reads, 1)
+  assert.equal(d.app.id, a.id)
+  assert.equal(d.data.app.id, a.id)
+  assert.equal(d.cachedSnapshot, true)
+  assert.ok(d.rows.some(row => row.kind === 'formation'))
+  assert.match(clean(d.summary.content), /Cached snapshot.*old/)
+  assert.match(clean(d.status.content), /Refreshing.*cached snapshot/)
+  pending.resolve(fresh)
+  await opening
+  assert.equal(d.cachedSnapshot, false)
+  assert.equal(d.data.formation[0].quantity, fresh.formation[0].quantity)
+  assert.ok(!clean(d.summary.content).includes('Cached snapshot'))
+  assert.equal(d.appSnapshots.get(a.id).formation[0].quantity, fresh.formation[0].quantity)
+})
+
+test('cached app snapshots never restore config values or revealed state across app switches', async t => {
+  const {dashboard: d, key} = await harness(t)
+  const [a, b] = d.catalog.apps
+  d.api.config = async id => ({TOKEN: `secret-${id}`})
+  await d.openApp(a)
+  await key('4')
+  await key('v')
+  assert.match(clean(d.detail.content), /secret-/)
+  await d.openApp(b)
+  const fresh = await d.api.appData(a.id)
+  const snapshot = Promise.withResolvers()
+  const config = Promise.withResolvers()
+  d.api.appData = () => snapshot.promise
+  d.api.config = () => config.promise
+  const opening = d.openApp(a)
+  assert.equal(d.cachedSnapshot, true)
+  assert.equal(d.config, null)
+  assert.equal(d.revealed.size, 0)
+  assert.match(d.rows[0].label, /Loading config/)
+  assert.ok(!JSON.stringify(d.appSnapshots.get(a.id)).includes('secret-'))
+  config.resolve({TOKEN: 'fresh-secret'})
+  await delay(0)
+  assert.equal(d.rows[0].kind, 'config')
+  assert.ok(!clean(d.detail.content).includes('fresh-secret'))
+  snapshot.resolve(fresh)
+  await opening
+})
+
+test('mutations invalidate the affected snapshot even if the follow-up refresh fails', async t => {
+  const {dashboard: d} = await harness(t)
+  const [a, b] = d.catalog.apps
+  await d.openApp(b)
+  await d.openApp(a)
+  assert.ok(d.appSnapshots.get(a.id))
+  assert.ok(d.appSnapshots.get(b.id))
+  d.api.appData = async () => { throw new Error('Refresh unavailable') }
+  await d.mutate(async () => {})
+  assert.equal(d.appSnapshots.get(a.id), null)
+  assert.ok(d.appSnapshots.get(b.id))
+  assert.match(d.message, /Change applied, but refresh failed/)
+  const pending = Promise.withResolvers()
+  d.api.appData = () => pending.promise
+  const opening = d.openApp(a)
+  assert.equal(d.data, null)
+  assert.equal(d.cachedSnapshot, false)
+  d.close()
+  await opening
+  assert.equal(d.appSnapshots.entries.size, 0)
+})
+
+test('a custom command cannot let a pre-command read repopulate an invalidated snapshot', async t => {
+  const {dashboard: d, key} = await harness(t, {executeHeroku: async () => ({code: 0})})
+  const app = d.catalog.apps[0]
+  await d.openApp(app)
+  const oldData = await d.api.appData(app.id)
+  const pending = Promise.withResolvers()
+  let signal
+  d.api.appData = (_id, options) => { signal = options.signal; return pending.promise }
+  const refreshing = d.loadApp()
+  await d.commandPane(app, ['restart', '--app', app.name], 'heroku restart')
+  assert.equal(signal.aborted, true)
+  assert.equal(d.appSnapshots.get(app.id), null)
+  pending.resolve(oldData)
+  await refreshing
+  assert.equal(d.appSnapshots.get(app.id), null)
+  await key('\x1b')
+})
+
 test('partial pipeline loads show unavailable rows while accessible apps still open and retries recover', async t => {
   const demo = createDemo()
   const apps = await demo.api.pipelineApps()
@@ -917,6 +1012,7 @@ for (const appContext of [false, true]) test(`Shift-P promotes from ${appContext
   }
   const {dashboard: d, key} = await harness(t, {...demo, demo: false})
   if (appContext) await key('\r')
+  d.appSnapshots.set(await d.api.appData(apps[1].id))
   assert.match(clean(d.footer.content), /P promote/)
   await key('P')
   assert.match(d.modal._label.content, /Promote.*constellation-staging/)
@@ -924,10 +1020,12 @@ for (const appContext of [false, true]) test(`Shift-P promotes from ${appContext
   await key('\r')
   assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Destinations: constellation-production/)
   assert.equal(writes.length, 0)
+  assert.ok(d.appSnapshots.get(apps[1].id))
   await key('constellation-staging')
   await key('\r')
   assert.deepEqual(writes, [{options: {pipeline: demo.context.pipeline, source: apps[0], stage: 'production', targets: [apps[1]]}, confirmation: 'constellation-staging'}])
   assert.match(clean(d.modal.content), /constellation-production: pending/)
+  assert.equal(d.appSnapshots.get(apps[1].id), null)
   assert.equal(d.busy, true)
   await key('a')
   assert.equal(Boolean(d.app), appContext)
@@ -2173,6 +2271,7 @@ test('interactive console commands temporarily take over and restore the termina
   const clear = screen.program.clear.bind(screen.program)
   screen.program.clear = () => { clears.push(screen.program.isAlt); return clear() }
   await key('\r')
+  assert.ok(d.appSnapshots.get(d.app.id))
   await key('C')
   assert.match(d.modal.children.map(child => child.content).join('\n'), /temporarily take over the terminal/)
   await key('\r')
@@ -2184,6 +2283,7 @@ test('interactive console commands temporarily take over and restore the termina
   assert.equal(d.interactiveRequest, null)
   assert.equal(d.busy, false)
   assert.match(d.message, /Interactive Heroku command completed/)
+  assert.equal(d.appSnapshots.get(d.app.id), null)
 })
 
 test('custom commands support cancellation, button selection, and reject retargeting and unavailable modes', async t => {
