@@ -2266,11 +2266,11 @@ test('L tails app-scoped logs in read-only mode with pause, scrolling, filtering
   await key('/')
   await key('error')
   await key('\r')
-  assert.match(output.content, /first ERROR/)
+  assert.match(clean(output.content), /first ERROR/)
   assert.ok(!output.content.includes('normal'))
   assert.ok(!output.content.includes('newest ERROR'))
   await key('p')
-  assert.match(output.content, /newest ERROR/)
+  assert.match(clean(output.content), /newest ERROR/)
   await key('/')
   await key('\x15')
   await key('\r')
@@ -2311,14 +2311,14 @@ test('log filters accept regexes directly and literal brackets without interrupt
   await key('status=5\\d{2}')
   await key('\r')
   const output = d.logRequest.output
-  assert.equal(output.content, '\x1b[31mERROR status=500\x1b[0m')
+  assert.equal(clean(output.content), 'ERROR status=500')
   await key('/')
   await key('\x15')
   await key('[')
   await key('\r')
   assert.equal(screen.focused, output)
   assert.equal(screen.grabKeys, false)
-  assert.equal(output.content, 'app[web.1] ready')
+  assert.equal(clean(output.content), 'app[web.1] ready')
   assert.equal(options.signal.aborted, false)
   options.onOutput('app[web.2] ready\n')
   await delay(125)
@@ -2329,7 +2329,7 @@ test('log filters accept regexes directly and literal brackets without interrupt
   await key('\r')
   assert.equal(screen.focused, output)
   assert.equal(screen.grabKeys, false)
-  assert.match(output.content, /\x1b\[31mERROR status=500\x1b\[0m/)
+  assert.match(clean(output.content), /ERROR status=500/)
   assert.match(output.content, /WARN/)
   assert.ok(!output.content.includes('INFO'))
   await key('/')
@@ -2343,6 +2343,46 @@ test('log filters accept regexes directly and literal brackets without interrupt
   await key('q')
   await running
   assert.equal(options.signal.aborted, true)
+})
+
+test('log highlights use contrasting text in both themes and restore original colors outside matches', async t => {
+  for (const theme of ['dark', 'light']) {
+    const {dashboard: d, screen, key} = await harness(t, {demo: false, theme,
+      executeHeroku: async (_args, {onOutput}) => {
+        onOutput('\x1b[31mERROR red\x1b[0m plain ERROR tail\n')
+        return {code: 0, signal: null}
+      }})
+    await d.openApp(d.rows[0].value)
+    await d.openLogs()
+    await key('/')
+    await key('error')
+    await key('\r')
+    const cells = () => {
+      const rows = screen.lines.map(line => line.map(cell => cell[1]).join(''))
+      const y = rows.findIndex(line => line.includes('ERROR red plain ERROR tail'))
+      assert.ok(y >= 0)
+      const x = rows[y].indexOf('ERROR red plain ERROR tail')
+      return screen.lines[y].slice(x, x + 26)
+    }
+    const line = cells()
+    const matched = blessed.colors.convert(palette.logMatch)
+    const normal = blessed.colors.convert(palette.bg)
+    assert.notEqual(matched, normal)
+    for (const index of [0, 4, 16, 20]) {
+      assert.equal(line[index][0] & 0x1ff, matched)
+      assert.equal((line[index][0] >> 9) & 0x1ff, blessed.colors.convert(palette.logMatchFg))
+    }
+    for (const index of [5, 6, 21, 22]) assert.equal(line[index][0] & 0x1ff, normal)
+    assert.equal((line[6][0] >> 9) & 0x1ff, blessed.colors.convert('red'))
+    await key('/')
+    await key('\x15')
+    await key('\r')
+    assert.equal(cells()[0][0] & 0x1ff, normal)
+    assert.equal(cells()[16][0] & 0x1ff, normal)
+    assert.equal((cells()[0][0] >> 9) & 0x1ff, blessed.colors.convert('red'))
+    await key('q')
+    d.close()
+  }
 })
 
 test('log streams and filter editors are cleaned up on app or pipeline navigation and Ctrl-C', async t => {

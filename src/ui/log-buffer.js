@@ -1,4 +1,5 @@
 import {ansi, clean} from './text.js'
+import {highlightLogLine, logMatchRanges} from './log-highlights.js'
 
 export const LOG_LIMITS = {lines: 10_000, characters: 2_000_000}
 
@@ -39,15 +40,25 @@ export class LogBuffer {
     try { expression = new RegExp(value, 'i') } catch { /* Keep literal matching. */ }
     this.filterText = value
     this.filterExpression = expression
+    this.highlightExpression = expression ? new RegExp(value, 'gi') : null
   }
 
-  get content() {
+  get content() { return this.render() }
+
+  render(highlight, foreground) {
     const text = ansi(this.paused ? this.frozen : this.raw)
     if (!this.filter) return text
     const query = this.filter.toLowerCase()
-    return text.split('\n').filter(line => {
+    let colors
+    const lines = []
+    for (const line of text.split('\n')) {
       const visible = clean(line)
-      return visible.toLowerCase().includes(query) || Boolean(this.filterExpression?.test(visible))
-    }).join('\n')
+      if (!visible.toLowerCase().includes(query) && !this.filterExpression?.test(visible)) continue
+      if (!highlight) { lines.push(line); continue }
+      const rendered = highlightLogLine(line, logMatchRanges(visible, this.filter, this.highlightExpression), highlight, colors, foreground)
+      lines.push(rendered.content)
+      colors = rendered.colors
+    }
+    return lines.join('\n')
   }
 }

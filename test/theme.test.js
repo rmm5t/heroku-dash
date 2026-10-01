@@ -23,5 +23,6 @@ test('both themes provide readable text and semantic colors after terminal quant
     }
     contrast('selectedFg', 'selected')
     contrast('selectedInactiveFg', 'selectedInactive')
+    contrast('logMatchFg', 'logMatch')
   }
 })

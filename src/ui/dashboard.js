@@ -1609,6 +1609,8 @@ export class Dashboard {
     const generation = this.generation
     const previous = this.screen.focused
     const buffer = new LogBuffer()
+    const matchHighlight = `\x1b[48;5;${blessed.colors.convert(palette.logMatch)}m`
+    const matchForeground = `\x1b[38;5;${blessed.colors.convert(palette.logMatchFg)}m`
     const controller = new AbortController()
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '95%', height: '85%', ...frame(),
       label: ` ${icons.code}  Logs · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
@@ -1632,7 +1634,7 @@ export class Dashboard {
       if (!current()) return
       const scroll = output.childBase
       heading.setContent(`Filter: ${buffer.filter ? single(buffer.filter) : '(none)'} · buffer ≤ ${LOG_LIMITS.lines} lines / ${LOG_LIMITS.characters / 1000}k characters`)
-      output.setContent(buffer.content || (buffer.filter ? 'No matching log lines.' : 'Waiting for log output…'))
+      output.setContent(buffer.render(matchHighlight, matchForeground) || (buffer.filter ? 'No matching log lines.' : 'Waiting for log output…'))
       if (buffer.paused) output.setScroll(resetScroll ? 0 : scroll)
       else output.setScrollPerc(100)
       footer.setContent(`${shortcut('p / Space', buffer.paused ? 'resume' : 'pause')}  ${shortcut('/', 'filter')}  ${shortcut('End', 'follow')}  ${shortcut('Esc / q', 'close')}\n${paint(`${buffer.paused ? 'Paused display' : 'Following'} · ${status}`, buffer.paused ? 'warning' : tone)}`)
