@@ -7,7 +7,7 @@ test('log buffering joins fragmented records, sanitizes controls, and filters li
   buffer.append('2026 app[web.1]: ER')
   buffer.append('ROR literal {red-fg} [.*]\n\x1b[31mnormal\x1b[0m\n\x1b]52;c;private')
   buffer.append('-payload\x07last line\n')
-  assert.equal(buffer.content, '2026 app[web.1]: ERROR literal {red-fg} [.*]\nnormal\nlast line\n')
+  assert.equal(buffer.content, '2026 app[web.1]: ERROR literal {red-fg} [.*]\n\x1b[31mnormal\x1b[0m\nlast line\n')
   buffer.filter = 'error'
   assert.equal(buffer.content, '2026 app[web.1]: ERROR literal {red-fg} [.*]')
   buffer.filter = '[.*]'
@@ -16,6 +16,23 @@ test('log buffering joins fragmented records, sanitizes controls, and filters li
   assert.equal(buffer.content, '')
   buffer.filter = ''
   assert.match(buffer.content, /normal/)
+})
+
+test('log colors survive fragmented output, filtering, and pause without matching escape codes', () => {
+  const buffer = new LogBuffer()
+  buffer.append('\x1b[38;5;')
+  buffer.append('196mER\x1b[1mROR\x1b[0m\n\x1b[2J\x1b[38;2;10;20;30mnormal\x1b[0m\n')
+  buffer.filter = 'error'
+  assert.equal(buffer.content, '\x1b[38;5;196mER\x1b[1mROR\x1b[0m')
+  buffer.pause()
+  buffer.append('\x1b[32mnew error\x1b[0m\n')
+  assert.ok(!buffer.content.includes('new error'))
+  buffer.resume()
+  assert.match(buffer.content, /\x1b\[32mnew error\x1b\[0m/)
+  buffer.filter = '196m'
+  assert.equal(buffer.content, '')
+  buffer.filter = 'normal'
+  assert.equal(buffer.content, '\x1b[38;2;10;20;30mnormal\x1b[0m')
 })
 
 test('log buffering bounds both record count and long unterminated lines', () => {

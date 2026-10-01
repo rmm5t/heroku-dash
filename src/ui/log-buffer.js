@@ -1,4 +1,4 @@
-import {clean} from './text.js'
+import {ansi, clean} from './text.js'
 
 export const LOG_LIMITS = {lines: 10_000, characters: 2_000_000}
 
@@ -32,9 +32,9 @@ export class LogBuffer {
   resume() { this.frozen = null }
 
   get content() {
-    const text = clean(this.paused ? this.frozen : this.raw)
+    const text = ansi(this.paused ? this.frozen : this.raw)
     if (!this.filter) return text
     const query = this.filter.toLowerCase()
-    return text.split('\n').filter(line => line.toLowerCase().includes(query)).join('\n')
+    return text.split('\n').filter(line => clean(line).toLowerCase().includes(query)).join('\n')
   }
 }

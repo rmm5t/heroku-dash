@@ -198,7 +198,7 @@ Press **L** from any app view to open a scrollable log viewer. It runs `heroku l
 - **/** opens a case-insensitive, literal text filter. Press **Enter** to apply, **Esc** to cancel, or submit an empty filter to show all lines. Filtering works on the retained buffer.
 - **Esc / q** closes the viewer and stops streaming; **Ctrl-C** exits Dash. Switching apps or pipelines also stops the stream. If the stream ends, close the viewer and press **L** to reconnect.
 
-The buffer retains at most **10,000 lines / 2,000,000 characters**. Pausing freezes the displayed snapshot while incoming logs continue into the bounded buffer; resuming shows its latest tail. Output updates are batched, terminal control sequences are removed, and logs stay in memory only while the viewer is open.
+The buffer retains at most **10,000 lines / 2,000,000 characters**. Pausing freezes the displayed snapshot while incoming logs continue into the bounded buffer; resuming shows its latest tail. Output updates are batched, ANSI colors and text styles are preserved just like console output, and other terminal control sequences are removed. Filtering searches visible text rather than ANSI codes. Logs stay in memory only while the viewer is open.
 
 ## Remote changes and config values
 
