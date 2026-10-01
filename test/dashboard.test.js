@@ -152,6 +152,208 @@ test('config cloning source choices exclude unavailable pipeline apps', async t 
   assert.equal(d.modal, null)
 })
 
+test('superseded workspace refreshes cannot overwrite newer data, status, or loading state', async t => {
+  const {dashboard: d} = await harness(t, {context: {reason: 'Workspace'}})
+  const catalog = {...d.catalog, warnings: []}
+  const calls = []
+  d.api.catalog = ({signal}) => {
+    const pending = Promise.withResolvers()
+    calls.push({signal, ...pending})
+    return pending.promise
+  }
+  const first = d.reload()
+  const second = d.reload()
+  assert.equal(calls[0].signal.aborted, true)
+  await first
+  assert.equal(d.loading.has('catalog'), true)
+  calls[1].resolve(catalog)
+  await second
+  assert.equal(d.catalog, catalog)
+  assert.equal(d.message, 'Workspace refreshed.')
+  assert.equal(d.messageTone, 'success')
+  calls[0].reject(new Error('Obsolete refresh failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.message, 'Workspace refreshed.')
+  assert.equal(d.loadingTimer, null)
+})
+
+test('workspace reads are canceled on navigation and shutdown and their late results are ignored', async t => {
+  const {dashboard: d} = await harness(t, {context: {reason: 'Workspace'}})
+  const catalog = d.catalog
+  const pending = Promise.withResolvers()
+  let signal
+  d.api.catalog = options => { signal = options.signal; return pending.promise }
+  const loading = d.reload()
+  await d.openPipeline(catalog.pipelines[0])
+  assert.equal(signal.aborted, true)
+  await loading
+  const message = d.message
+  pending.resolve({...catalog, pipelines: []})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.catalog, catalog)
+  assert.equal(d.message, message)
+  await d.back()
+  const closed = Promise.withResolvers()
+  d.api.catalog = options => { signal = options.signal; return closed.promise }
+  const refreshing = d.reload()
+  d.close()
+  const lastMessage = d.message
+  d.setStatus = () => assert.fail('Closed dashboards must not receive read statuses')
+  assert.equal(signal.aborted, true)
+  await refreshing
+  closed.reject(new Error('Late failure after close'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.message, lastMessage)
+  assert.equal(d.loadingTimer, null)
+})
+
+test('navigation cancels pipeline and app reads without replacing the newer app view', async t => {
+  const {dashboard: d} = await harness(t)
+  const pendingPipeline = Promise.withResolvers()
+  let pipelineSignal
+  d.api.pipelineApps = (_id, {signal}) => { pipelineSignal = signal; return pendingPipeline.promise }
+  const oldPipeline = d.openPipeline(d.pipeline)
+  await d.openApp(d.catalog.apps[0])
+  assert.equal(pipelineSignal.aborted, true)
+  await oldPipeline
+  assert.equal(d.app.id, d.catalog.apps[0].id)
+  pendingPipeline.reject(new Error('Late pipeline failure'))
+  const appData = d.api.appData.bind(d.api)
+  const pendingApp = Promise.withResolvers()
+  let appSignal
+  d.api.appData = (id, {signal}) => {
+    if (id !== d.catalog.apps[0].id) return appData(id)
+    appSignal = signal
+    return pendingApp.promise
+  }
+  const oldApp = d.openApp(d.catalog.apps[0])
+  await d.openApp(d.catalog.apps[1])
+  assert.equal(appSignal.aborted, true)
+  await oldApp
+  const message = d.message
+  pendingApp.reject(new Error('Late app failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.app.id, d.catalog.apps[1].id)
+  assert.equal(d.message, message)
+  assert.equal(d.busy, false)
+})
+
+test('an obsolete app refresh cannot start a config read in the newly selected app', async t => {
+  const {dashboard: d} = await harness(t)
+  await d.openApp(d.catalog.apps[0])
+  d.tab = 3
+  const appData = d.api.appData.bind(d.api)
+  const nextData = await appData(d.catalog.apps[1].id)
+  const old = Promise.withResolvers()
+  const next = Promise.withResolvers()
+  const configCalls = []
+  d.api.appData = id => id === d.catalog.apps[0].id ? old.promise : next.promise
+  d.api.config = async id => { configCalls.push(id); return {CURRENT: id} }
+  const refreshing = d.reload()
+  const opening = d.openApp(d.catalog.apps[1])
+  await refreshing
+  assert.deepEqual(configCalls, [])
+  next.resolve(nextData)
+  await opening
+  assert.deepEqual(configCalls, [d.catalog.apps[1].id])
+  old.reject(new Error('Old refresh failed'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(d.config, {CURRENT: d.catalog.apps[1].id})
+})
+
+test('config reads cancel superseded work and never redraw or report failures after shutdown', async t => {
+  const {dashboard: d} = await harness(t)
+  await d.openApp(d.catalog.apps[0])
+  d.tab = 3
+  const calls = []
+  d.api.config = (_id, {signal}) => {
+    const pending = Promise.withResolvers()
+    calls.push({signal, ...pending})
+    return pending.promise
+  }
+  const first = d.loadConfig()
+  const second = d.loadConfig()
+  assert.equal(calls[0].signal.aborted, true)
+  await first
+  assert.equal(d.loading.has('config'), true)
+  calls[1].resolve({LATEST: 'new-value'})
+  await second
+  calls[0].reject(new Error('Old config failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(d.config, {LATEST: 'new-value'})
+  assert.equal(d.configError, null)
+  const third = d.loadConfig()
+  d.close()
+  d.drawApp = () => assert.fail('Closed dashboards must not redraw')
+  assert.equal(calls[2].signal.aborted, true)
+  await third
+  calls[2].reject(new Error('Config failed after shutdown'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.config, null)
+  assert.equal(d.configError, null)
+})
+
+test('resource reads cancel on replacement, app navigation, and shutdown without stale errors', async t => {
+  const calls = []
+  const load = kind => (_data, {signal}) => {
+    const pending = Promise.withResolvers()
+    calls.push({kind, signal, ...pending})
+    return pending.promise
+  }
+  const {dashboard: d} = await harness(t, {resources: {available: true, dynos: load('dynos'), addons: load('addons')}})
+  await d.openApp(d.catalog.apps[0])
+  d.changeTab(1)
+  const replacement = d.loadResourceDetails({force: true})
+  assert.equal(calls[0].signal.aborted, true)
+  calls[1].resolve({formations: {}, instances: {}})
+  await replacement
+  calls[0].reject(new Error('Old resource failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.resourceErrors.dynos, undefined)
+  const oldApp = d.loadResourceDetails({force: true})
+  await d.openApp(d.catalog.apps[1])
+  assert.equal(calls[2].signal.aborted, true)
+  await oldApp
+  d.changeTab(2)
+  assert.equal(calls[3].kind, 'dynos')
+  assert.equal(calls[4].kind, 'addons')
+  d.close()
+  assert.ok(calls.slice(2).every(call => call.signal.aborted))
+  for (const call of calls.slice(2)) call.reject(new Error('Resource failed after cancellation'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(d.resourceErrors, {})
+  assert.equal(d.loadingTimer, null)
+})
+
+test('closing during action preparation cancels reads and cannot start a write', async t => {
+  for (const action of ['add', 'promote', 'clone']) {
+    const demo = createDemo()
+    demo.api.readOnly = false
+    demo.api.config = async () => ({})
+    const {dashboard: d} = await harness(t, {...demo, demo: false})
+    if (action === 'clone') {
+      await d.openApp(d.catalog.apps[0])
+      d.tab = 3
+      await d.loadConfig()
+    }
+    const pending = Promise.withResolvers()
+    let signal
+    if (action === 'add') d.api.appRegions = options => { signal = options.signal; return pending.promise }
+    else d.api.pipelineApps = (_id, options) => { signal = options.signal; return pending.promise }
+    d.api.createPipelineApp = d.api.promotePipelineApp = d.api.clonePipelineConfig = async () => assert.fail('Canceled preparation cannot write')
+    const preparing = action === 'add' ? d.addApp() : action === 'promote' ? d.promoteApp() : d.cloneConfigFromApp()
+    assert.ok(d.modal)
+    d.close()
+    const message = d.message
+    assert.equal(signal.aborted, true)
+    await preparing
+    pending.reject(new Error('Preparation failed after closing'))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(d.message, message)
+    assert.equal(d.modal, null)
+  }
+})
+
 test('o in Add-ons opens the selected datastore, third-party SSO, or shared attachment dashboard', async t => {
   const demo = createDemo()
   const original = demo.api.appData.bind(demo.api)

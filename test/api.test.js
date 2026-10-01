@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import {getEventListeners} from 'node:events'
+import {Agent, createServer} from 'node:http'
 import test from 'node:test'
+import {HTTP} from '@heroku/http-call'
 import {errorMessage, HerokuAPI, normalizeHostname} from '../src/api.js'
 
 test('list follows Next-Range and preserves headers', async () => {
@@ -89,6 +92,129 @@ test('empty pipelines need no app lookups and coupling-list failures still rejec
   assert.deepEqual(await api.pipelineApps('empty'), [])
   api.client.request = async () => { throw new Error('Couplings unavailable') }
   await assert.rejects(api.pipelineApps('pipeline'), /Couplings unavailable/)
+})
+
+test('aborted reads settle promptly, detach listeners, and consume late transport failures', async () => {
+  const controller = new AbortController()
+  const pending = Promise.withResolvers()
+  let calls = 0
+  const api = new HerokuAPI({request(_path, options) {
+    calls++
+    assert.equal(options.signal, controller.signal)
+    return pending.promise
+  }})
+  const loading = api.get('/apps/app', {signal: controller.signal})
+  const rejected = assert.rejects(loading, {name: 'AbortError'})
+  controller.abort()
+  await rejected
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
+  pending.reject(new Error('Late transport error'))
+  await new Promise(resolve => setImmediate(resolve))
+  await assert.rejects(api.get('/apps/app', {signal: controller.signal}), {name: 'AbortError'})
+  assert.equal(calls, 1)
+})
+
+test('catalog, app data, and config cancellation rejects instead of returning partial data', async () => {
+  for (const [load, count] of [
+    [(api, options) => api.catalog(options), 3],
+    [(api, options) => api.appData('app', options), 9],
+    [(api, options) => api.config('app', options), 1],
+  ]) {
+    const controller = new AbortController()
+    const pending = Promise.withResolvers()
+    const calls = []
+    const api = new HerokuAPI({request(path, options) {
+      assert.equal(options.signal, controller.signal)
+      calls.push(path)
+      return pending.promise
+    }})
+    const loading = load(api, {signal: controller.signal})
+    assert.equal(calls.length, count)
+    const rejected = assert.rejects(loading, {name: 'AbortError'})
+    controller.abort()
+    await rejected
+    pending.reject(new Error('Late error'))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(calls.length, count)
+  }
+})
+
+test('canceling a pipeline lookup stops queued app requests instead of creating unavailable rows', async () => {
+  const controller = new AbortController()
+  const pending = Promise.withResolvers()
+  let apps = 0
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(options.signal, controller.signal)
+    if (path.endsWith('pipeline-couplings')) return {body: Array.from({length: 10}, (_, index) => ({app: {id: `app-${index}`}, stage: 'staging'}))}
+    apps++
+    return pending.promise
+  }})
+  const loading = api.pipelineApps('pipeline', {signal: controller.signal})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(apps, 4)
+  const rejected = assert.rejects(loading, {name: 'AbortError'})
+  controller.abort()
+  await rejected
+  pending.reject(new Error('Late lookup error'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(apps, 4)
+})
+
+test('the CLI HTTP transport cancels its socket and retry backoff', {timeout: 2000}, async t => {
+  const arrived = Promise.withResolvers()
+  const disconnected = Promise.withResolvers()
+  const server = createServer((_request, response) => {
+    response.once('close', () => disconnected.resolve())
+    arrived.resolve()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+  })
+  const controller = new AbortController()
+  t.after(() => controller.abort())
+  const agent = new Agent()
+  t.after(() => agent.destroy())
+  let transportRequest
+  class Transport extends HTTP {
+    static request(path, options) {
+      transportRequest = super.request(path, options)
+      return transportRequest
+    }
+  }
+  const api = new HerokuAPI({http: Transport})
+  const loading = api.get(`http://127.0.0.1:${server.address().port}/apps/app`, {signal: controller.signal, agent})
+  const rejected = assert.rejects(loading, {name: 'AbortError'})
+  await arrived.promise
+  controller.abort()
+  await rejected
+  await assert.rejects(transportRequest, {name: 'AbortError'})
+  await disconnected.promise
+})
+
+test('canceling during HTTP retry backoff clears the wait without starting another attempt', {timeout: 2000}, async () => {
+  const controller = new AbortController()
+  const retrying = Promise.withResolvers()
+  let attempts = 0
+  class Transport extends HTTP {
+    _performRequest() {
+      attempts++
+      return Promise.reject(Object.assign(new Error('Connection reset'), {code: 'ECONNRESET'}))
+    }
+
+    _maybeRetry(error) {
+      retrying.resolve()
+      return super._maybeRetry(error)
+    }
+  }
+  const api = new HerokuAPI({http: Transport})
+  const loading = api.http.request('http://127.0.0.1/apps/app', {signal: controller.signal})
+  const rejected = assert.rejects(loading, {name: 'AbortError'})
+  await retrying.promise
+  controller.abort()
+  await rejected
+  assert.equal(attempts, 1)
 })
 
 test('add-on dashboards use authoritative datastore and third-party SSO links, preferring the current attachment', async () => {

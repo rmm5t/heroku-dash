@@ -110,6 +110,8 @@ Pipeline app lookups run at most four at a time. Individual lookup failures appe
 
 Switching apps keeps the selected tab, so moving from Metrics on one app opens Metrics on the next. The destination app's data loads automatically, including config vars and optional cost/limit details when those tabs are selected.
 
+Navigating to another app or pipeline, replacing a pending read, or closing Dash cancels obsolete reads. Late results and errors cannot overwrite the active view or its status. Shared dyno-size lookups continue while another view still needs them.
+
 Single-click a tab's number, icon, or label to switch views and focus the resource list. This also works with compact tabs in narrow terminals. Clicking the active tab keeps the current selection and revealed config values.
 
 Overview, Resources, Add-ons, Settings, and Metrics use aligned tables with fixed column headers and right-aligned quantities. Columns adapt to the terminal width; narrow layouts hide the Resources age and Add-ons service columns. Full values, including shortened names and hidden columns, remain available in Details.

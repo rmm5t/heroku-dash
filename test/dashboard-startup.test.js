@@ -204,6 +204,25 @@ test('pipeline options and detection automatically select the team and filter ap
   }
 })
 
+test('closing during initial pipeline loading cancels reads and suppresses late startup warnings', async t => {
+  const demo = createDemo()
+  demo.catalog.warnings = ['Catalog warning']
+  const pending = Promise.withResolvers()
+  let signal
+  demo.api.pipelineApps = (_id, options) => { signal = options.signal; return pending.promise }
+  const io = terminal(t)
+  const dashboard = new Dashboard({...demo, screen: io.screen, refresh: 0})
+  t.after(() => dashboard.close())
+  const starting = dashboard.start()
+  dashboard.close()
+  dashboard.setStatus = () => assert.fail('Canceled startup must not report warnings after closing')
+  assert.equal(signal.aborted, true)
+  await starting
+  pending.reject(new Error('Late startup failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(dashboard.loadingTimer, null)
+})
+
 test('startup detects a light terminal before rendering and restores raw mode on exit', {timeout: 2000}, async t => {
   const io = terminal(t, '\x1b]11;rgb:ffff/ffff/ffff\x1b\\')
   const running = runDashboard({...createDemo(), screen: io.screen, refresh: 0})

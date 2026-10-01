@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {HerokuAPI} from '../src/api.js'
 import {resolveHierarchy} from '../src/hierarchy.js'
 
 const team = {id: 'team-1', name: 'acme'}
@@ -42,4 +43,26 @@ test('personal ownership and inaccessible parent metadata have explicit labels',
   assert.equal(result.team.name, 'Team unavailable')
   assert.equal(result.pipeline.name, pipeline.name)
   assert.match(result.errors.hierarchy, /permission/)
+})
+
+test('hierarchy reads forward cancellation without replacing it with an unavailable-team warning', async () => {
+  const controller = new AbortController()
+  const pending = Promise.withResolvers()
+  const reached = Promise.withResolvers()
+  const paths = []
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(options.signal, controller.signal)
+    paths.push(path)
+    if (path.startsWith('/pipelines/')) return {body: pipeline}
+    reached.resolve()
+    return pending.promise
+  }})
+  const loading = resolveHierarchy(api, {teams: [], pipelines: []}, {pipeline: {id: pipeline.id}, signal: controller.signal})
+  await reached.promise
+  assert.deepEqual(paths, ['/pipelines/pipeline-1', '/teams/team-1'])
+  const rejected = assert.rejects(loading, {name: 'AbortError'})
+  controller.abort()
+  await rejected
+  pending.reject(new Error('Late team failure'))
+  await new Promise(resolve => setImmediate(resolve))
 })

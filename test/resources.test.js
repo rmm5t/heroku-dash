@@ -116,3 +116,78 @@ test('add-ons reuse provider limits and report semantics with GET-only access an
   assert.equal(requests[0].options.headers['Accept-Expansion'], 'addon_service,plan')
   assert.match(requests[0].options.headers.Accept, /version=3\.sdk/)
 })
+
+test('canceling one dyno-size subscriber preserves a shared lookup for the other subscriber', async () => {
+  const pending = Promise.withResolvers()
+  const firstController = new AbortController()
+  const secondController = new AbortController()
+  let calls = 0
+  let sharedSignal
+  const provider = new ResourcesIntegration({list(_path, {signal}) {
+    calls++
+    sharedSignal = signal
+    return pending.promise
+  }}, {specs}, '0.5.1')
+  const first = provider.dynos(data, {signal: firstController.signal})
+  const second = provider.dynos(data, {signal: secondController.signal})
+  assert.equal(calls, 1)
+  const rejected = assert.rejects(first, {name: 'AbortError'})
+  firstController.abort()
+  await rejected
+  assert.equal(sharedSignal.aborted, false)
+  pending.resolve([{memory: 512}])
+  assert.equal((await second).formations.web.ramPerDynoMb, 512)
+  await provider.dynos(data)
+  assert.equal(calls, 1)
+})
+
+test('canceling all dyno-size subscribers aborts shared work and a late failure cannot clear a newer cache', async () => {
+  const pending = Promise.withResolvers()
+  const controllers = [new AbortController(), new AbortController()]
+  let calls = 0
+  let sharedSignal
+  const provider = new ResourcesIntegration({list(_path, {signal}) {
+    calls++
+    sharedSignal = signal
+    return calls === 1 ? pending.promise : Promise.resolve([{memory: 1024}])
+  }}, {specs}, '0.5.1')
+  const waiting = controllers.map(controller => provider.dynos(data, {signal: controller.signal}))
+  const rejected = waiting.map(loading => assert.rejects(loading, {name: 'AbortError'}))
+  for (const controller of controllers) controller.abort()
+  await Promise.all(rejected)
+  assert.equal(sharedSignal.aborted, true)
+  assert.equal((await provider.dynos(data)).formations.web.ramPerDynoMb, 1024)
+  pending.reject(new Error('Old canceled lookup failed'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await provider.dynos(data)).formations.web.ramPerDynoMb, 1024)
+  assert.equal(calls, 2)
+})
+
+test('add-on helper reads use their parent signal and cancellation is not reported as an add-on error', async () => {
+  const controller = new AbortController()
+  const pending = Promise.withResolvers()
+  const reached = Promise.withResolvers()
+  let helperSignal
+  const api = new HerokuAPI({request(path, options) {
+    assert.equal(options.method, 'GET')
+    if (path === '/apps/app-id/addons') {
+      assert.equal(options.signal, controller.signal)
+      return Promise.resolve({body: [{id: 'addon'}]})
+    }
+    helperSignal = options.signal
+    reached.resolve()
+    return pending.promise
+  }}, {readOnly: true})
+  const provider = new ResourcesIntegration(api, {
+    fetchAddonDetails(reader) { return reader.get('/addons/details', {method: 'PATCH', signal: new AbortController().signal}) },
+    buildReport() { assert.fail('Canceled details must not produce a report') },
+  }, '0.5.1')
+  const loading = provider.addons(data, {signal: controller.signal})
+  await reached.promise
+  const rejected = assert.rejects(loading, {name: 'AbortError'})
+  controller.abort()
+  await rejected
+  assert.equal(helperSignal.aborted, true)
+  pending.reject(new Error('Late details failure'))
+  await new Promise(resolve => setImmediate(resolve))
+})

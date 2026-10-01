@@ -1,6 +1,7 @@
 import {setTimeout as delay} from 'node:timers/promises'
 import {isIP} from 'node:net'
 import {domainToASCII} from 'node:url'
+import {withAbort} from './read-requests.js'
 
 const V3 = 'application/vnd.heroku+json; version=3'
 const encode = encodeURIComponent
@@ -54,12 +55,26 @@ export class HerokuAPI {
   constructor(client, {readOnly = false} = {}) {
     this.client = client
     this.readOnly = readOnly
+    // http-call forwards signals to sockets, but its retry backoff also needs
+    // cancellation so abandoned reads cannot keep the dashboard alive.
+    if (client.http) this.http = class extends client.http {
+      async _request() {
+        this.options.signal?.throwIfAborted()
+        return super._request()
+      }
+
+      _wait(ms) {
+        return this.options.signal ? delay(ms, undefined, {signal: this.options.signal}) : super._wait(ms)
+      }
+    }
   }
 
   async request(path, options = {}) {
     const method = options.method ?? 'GET'
     if (this.readOnly && method !== 'GET') throw new Error('Read-only mode: remote changes are disabled.')
-    return this.client.request(path, {retryAuth: false, ...options, method, headers: {Accept: V3, ...options.headers}})
+    options.signal?.throwIfAborted()
+    const transport = this.http ?? this.client
+    return withAbort(transport.request(path, {retryAuth: false, ...options, method, headers: {Accept: V3, ...options.headers}}), options.signal)
   }
 
   async get(path, options) {
@@ -78,11 +93,13 @@ export class HerokuAPI {
       if (range && seen.has(range)) throw new Error(`Repeated pagination range from ${path}`)
       if (range) seen.add(range)
     } while (range)
+    options.signal?.throwIfAborted()
     return items
   }
 
-  async catalog() {
-    const results = await Promise.allSettled([this.list('/teams'), this.list('/pipelines'), this.list('/apps')])
+  async catalog(options = {}) {
+    const results = await Promise.allSettled([this.list('/teams', options), this.list('/pipelines', options), this.list('/apps', options)])
+    options.signal?.throwIfAborted()
     const catalog = {warnings: []}
     for (const [i, key] of ['teams', 'pipelines', 'apps'].entries()) {
       const result = results[i]
@@ -96,61 +113,70 @@ export class HerokuAPI {
     return catalog
   }
 
-  async coupling(app) {
+  async coupling(app, options = {}) {
     try {
-      return await this.get(`/apps/${encode(app)}/pipeline-couplings`)
+      return await this.get(`/apps/${encode(app)}/pipeline-couplings`, options)
     } catch (error) {
+      options.signal?.throwIfAborted()
       if (statusCode(error) === 404) return null
       throw error
     }
   }
 
-  async pipelineApps(pipeline) {
-    const couplings = await this.list(`/pipelines/${encode(pipeline)}/pipeline-couplings`)
+  async pipelineApps(pipeline, options = {}) {
+    const couplings = await this.list(`/pipelines/${encode(pipeline)}/pipeline-couplings`, options)
     const apps = new Array(couplings.length)
     let next = 0
     await Promise.all(Array.from({length: Math.min(4, couplings.length)}, async () => {
       while (next < couplings.length) {
+        options.signal?.throwIfAborted()
         const index = next++
         const coupling = couplings[index]
         try {
-          apps[index] = {...await this.get(`/apps/${encode(coupling.app.id)}`), stage: coupling.stage}
+          apps[index] = {...await this.get(`/apps/${encode(coupling.app.id)}`, options), stage: coupling.stage}
         } catch (error) {
+          options.signal?.throwIfAborted()
           // Retain failed members so views and actions can account for every app.
           apps[index] = {...coupling.app, name: coupling.app.name ?? coupling.app.id,
             stage: coupling.stage, loadError: errorMessage(error) || 'Unable to load app details.'}
         }
       }
     }))
+    options.signal?.throwIfAborted()
     return apps
   }
 
-  async appData(app) {
+  async appData(app, options = {}) {
     const base = `/apps/${encode(app)}`
     const sections = {
-      app: () => this.get(base),
-      coupling: () => this.coupling(app),
-      formation: () => this.list(`${base}/formation`),
-      dynos: () => this.list(`${base}/dynos`),
-      addons: () => this.list(`${base}/addons`),
-      attachments: () => this.list(`${base}/addon-attachments`),
-      domains: () => this.list(`${base}/domains`),
-      buildpacks: () => this.list(`${base}/buildpack-installations`),
+      app: () => this.get(base, options),
+      coupling: () => this.coupling(app, options),
+      formation: () => this.list(`${base}/formation`, options),
+      dynos: () => this.list(`${base}/dynos`, options),
+      addons: () => this.list(`${base}/addons`, options),
+      attachments: () => this.list(`${base}/addon-attachments`, options),
+      domains: () => this.list(`${base}/domains`, options),
+      buildpacks: () => this.list(`${base}/buildpack-installations`, options),
       // Only the latest page: release histories can be enormous.
-      releases: () => this.get(`${base}/releases`, {headers: {Range: 'version ..; order=desc,max=20;'}}),
+      releases: () => this.get(`${base}/releases`, {...options, headers: {...options.headers, Range: 'version ..; order=desc,max=20;'}}),
     }
     const data = {errors: {}, fetchedAt: new Date().toISOString()}
     await Promise.all(Object.entries(sections).map(async ([key, load]) => {
       try { data[key] = await load() }
-      catch (error) { data.errors[key] = errorMessage(error); data[key] = ['app', 'coupling'].includes(key) ? null : [] }
+      catch (error) {
+        options.signal?.throwIfAborted()
+        data.errors[key] = errorMessage(error); data[key] = ['app', 'coupling'].includes(key) ? null : []
+      }
     }))
+    options.signal?.throwIfAborted()
     if (!data.app) throw new Error(data.errors.app)
     return data
   }
 
-  config(app) { return this.get(`/apps/${encode(app)}/config-vars`) }
+  config(app, options) { return this.get(`/apps/${encode(app)}/config-vars`, options) }
 
-  async addonDashboardUrl(addon, attachment, app) {
+  async addonDashboardUrl(addon, attachment, app, options = {}) {
+    options.signal?.throwIfAborted()
     if (!addon?.id) throw new Error('Select an add-on to open its management dashboard.')
     const datastoreURL = resource => {
       const service = resource.addon_service?.name ?? resource.plan?.name?.split(':')[0]
@@ -164,7 +190,7 @@ export class HerokuAPI {
     // pages now live in Dashboard's app-scoped datastore routes.
     let loadedAddon
     if (app?.name && !addon.addon_service?.name && !addon.plan?.name?.includes(':')) {
-      loadedAddon = await this.get(`/addons/${encode(addon.id)}`, {timeout: 15_000})
+      loadedAddon = await this.get(`/addons/${encode(addon.id)}`, {timeout: 15_000, ...options})
       addon = {...addon, ...loadedAddon}
     }
     const datastore = datastoreURL(addon)
@@ -179,22 +205,23 @@ export class HerokuAPI {
     if (attachment?.web_url) return validate(attachment.web_url)
     if (attachment?.id) {
       try {
-        const details = await this.get(`/addon-attachments/${encode(attachment.id)}`, {timeout: 15_000})
+        const details = await this.get(`/addon-attachments/${encode(attachment.id)}`, {timeout: 15_000, ...options})
         if (details?.web_url) return validate(details.web_url)
       } catch (error) {
+        options.signal?.throwIfAborted()
         if (statusCode(error) !== 404) throw error
       }
     }
     if (addon.web_url) return validate(addon.web_url)
-    const details = loadedAddon ?? await this.get(`/addons/${encode(addon.id)}`, {timeout: 15_000})
+    const details = loadedAddon ?? await this.get(`/addons/${encode(addon.id)}`, {timeout: 15_000, ...options})
     const resolvedDatastore = details && datastoreURL({...addon, ...details})
     if (resolvedDatastore) return resolvedDatastore
     if (details?.web_url) return validate(details.web_url)
     throw new Error('This add-on does not provide a management dashboard.')
   }
 
-  async appRegions() {
-    return (await this.list('/regions')).filter(region => !region.private_capable)
+  async appRegions(options) {
+    return (await this.list('/regions', options)).filter(region => !region.private_capable)
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
@@ -246,7 +273,7 @@ export class HerokuAPI {
   async waitForPromotion(promotion, targets, {signal, onUpdate = () => {}, wait = delay, attempts = 300} = {}) {
     for (let attempt = 0; attempt < attempts; attempt++) {
       signal?.throwIfAborted()
-      const results = await this.list(`/pipeline-promotions/${encode(promotion.id)}/promotion-targets`)
+      const results = await this.list(`/pipeline-promotions/${encode(promotion.id)}/promotion-targets`, {signal})
       signal?.throwIfAborted()
       onUpdate(results)
       if (targets.every(app => results.some(result => result.app.id === app.id && ['succeeded', 'failed'].includes(result.status)))) return results
@@ -283,20 +310,20 @@ export class HerokuAPI {
     return this.get(`/apps/${encode(app)}/config-vars`, {method: 'PATCH', body: {[key]: value}})
   }
 
-  async validateConfigCloneApps({pipeline, source, destination}) {
+  async validateConfigCloneApps({pipeline, source, destination}, options = {}) {
     if (!pipeline?.id || !source?.id || !destination?.id || source.id === destination.id) {
       throw new Error('Choose two different apps in the same pipeline.')
     }
-    const couplings = await this.list(`/pipelines/${encode(pipeline.id)}/pipeline-couplings`)
+    const couplings = await this.list(`/pipelines/${encode(pipeline.id)}/pipeline-couplings`, options)
     if (![source, destination].every(app => couplings.some(coupling => coupling.app.id === app.id))) {
       throw new Error('Both apps must belong to the selected pipeline. Refresh and try again.')
     }
   }
 
-  async prepareConfigClone({pipeline, source, destination}) {
-    await this.validateConfigCloneApps({pipeline, source, destination})
-    requireEmptyConfig(await this.config(destination.id))
-    const sourceConfig = await this.config(source.id)
+  async prepareConfigClone({pipeline, source, destination}, options = {}) {
+    await this.validateConfigCloneApps({pipeline, source, destination}, options)
+    requireEmptyConfig(await this.config(destination.id, options))
+    const sourceConfig = await this.config(source.id, options)
     const values = configCloneValues(sourceConfig)
     return {pipeline, source, destination, values,
       skippedCount: Object.keys(sourceConfig).length - Object.keys(values).length}

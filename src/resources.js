@@ -1,6 +1,7 @@
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {errorMessage} from './api.js'
+import {withAbort} from './read-requests.js'
 
 const SDK_HEADERS = {Accept: 'application/vnd.heroku+json; version=3.sdk', 'Accept-Expansion': 'addon_service,plan'}
 const SIZE_CACHE_MS = 5 * 60_000
@@ -25,28 +26,51 @@ export async function loadResourcesIntegration(config, api, importModule = url =
 export class ResourcesIntegration {
   constructor(api, helpers, version) {
     Object.assign(this, {api, helpers, version, available: true})
-    // The companion helpers receive only GET access, using dash's authenticated
-    // client. They cannot prompt for login or perform writes through this adapter.
-    this.reader = {get: async (path, options = {}) => ({body: await api.get(path, {...options, method: 'GET'})})}
   }
 
-  async sizes(force) {
-    if (!this.sizeRequest || (this.sizeLoadedAt && (force || Date.now() - this.sizeLoadedAt > SIZE_CACHE_MS))) {
+  reader(signal) {
+    // Each helper gets GET-only access tied to its own view's read lifetime.
+    return {get: async (path, options = {}) => {
+      const requestSignal = signal && options.signal && signal !== options.signal
+        ? AbortSignal.any([signal, options.signal]) : signal ?? options.signal
+      return {body: await this.api.get(path, {...options, method: 'GET', signal: requestSignal})}
+    }}
+  }
+
+  async sizes(force, signal) {
+    signal?.throwIfAborted()
+    if (!this.sizeRequest || this.sizeRequest.controller.signal.aborted
+      || (this.sizeLoadedAt && (force || Date.now() - this.sizeLoadedAt > SIZE_CACHE_MS))) {
       this.sizeLoadedAt = 0
-      const request = this.api.list('/dyno-sizes').then(sizes => {
-        this.sizeLoadedAt = Date.now()
+      const request = {controller: new AbortController(), users: 0, settled: false}
+      request.promise = this.api.list('/dyno-sizes', {signal: request.controller.signal}).then(sizes => {
+        request.controller.signal.throwIfAborted()
+        request.settled = true
+        if (this.sizeRequest === request) this.sizeLoadedAt = Date.now()
         return sizes
       }).catch(error => {
-        this.sizeRequest = null
+        request.settled = true
+        if (this.sizeRequest === request) this.sizeRequest = null
         throw error
       })
       this.sizeRequest = request
     }
-    return this.sizeRequest
+    const request = this.sizeRequest
+    request.users++
+    try { return await withAbort(request.promise, signal) }
+    finally {
+      request.users--
+      // Cancel shared work only after every waiting view has released it.
+      if (!request.users && !request.settled) {
+        request.controller.abort()
+        if (this.sizeRequest === request) this.sizeRequest = null
+      }
+    }
   }
 
-  async dynos(data, {force = false} = {}) {
-    const sizes = await this.sizes(force)
+  async dynos(data, {force = false, signal} = {}) {
+    const sizes = await this.sizes(force, signal)
+    signal?.throwIfAborted()
     const {memoryForSize, cpuForSize, monthlyCostForSize} = this.helpers.specs
     const shielded = data.app.space?.shield === true
     const allocation = (size, quantity) => {
@@ -66,16 +90,21 @@ export class ResourcesIntegration {
     }
   }
 
-  async addons(data) {
-    const owned = await this.api.list(`/apps/${encodeURIComponent(data.app.id)}/addons`, {headers: SDK_HEADERS})
+  async addons(data, {signal} = {}) {
+    signal?.throwIfAborted()
+    const reader = this.reader(signal)
+    const owned = await this.api.list(`/apps/${encodeURIComponent(data.app.id)}/addons`, {headers: SDK_HEADERS, signal})
+    signal?.throwIfAborted()
     const all = new Map(owned.map(addon => [addon.id, addon]))
     for (const attachment of data.attachments) {
       if (!all.has(attachment.addon.id)) all.set(attachment.addon.id, null)
     }
     const entries = await Promise.all([...all].map(async ([id, resource]) => {
       try {
-        const addon = resource ?? await this.api.get(`/addons/${encodeURIComponent(id)}`, {headers: SDK_HEADERS})
-        const details = await this.helpers.fetchAddonDetails(this.reader, addon)
+        signal?.throwIfAborted()
+        const addon = resource ?? await this.api.get(`/addons/${encodeURIComponent(id)}`, {headers: SDK_HEADERS, signal})
+        const details = await this.helpers.fetchAddonDetails(reader, addon)
+        signal?.throwIfAborted()
         const report = this.helpers.buildReport(null, null, [{app: data.app, dynos: [], formation: [], addons: [{...addon, ...details}]}], [])
         if (!report.addons?.[0]) throw new Error('Unexpected heroku-resources add-on report')
         return [id, {
@@ -84,9 +113,11 @@ export class ResourcesIntegration {
           shared: addon.app?.id ? addon.app.id !== data.app.id : !resource,
         }]
       } catch (error) {
+        signal?.throwIfAborted()
         return [id, {error: errorMessage(error)}]
       }
     }))
+    signal?.throwIfAborted()
     return {byId: Object.fromEntries(entries)}
   }
 }

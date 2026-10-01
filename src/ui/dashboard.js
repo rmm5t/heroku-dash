@@ -5,6 +5,7 @@ import packageJSON from '../../package.json' with {type: 'json'}
 import {APP_STAGES, errorMessage, normalizeHostname, validateAppName} from '../api.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
+import {ReadRequests, withAbort} from '../read-requests.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
 import {ansi, appRows, clean, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
@@ -165,11 +166,10 @@ export class Dashboard {
     this.updatingRows = false
     this.navItems = []
     this.generation = 0
-    this.navGeneration = 0
+    this.readRequests = new ReadRequests(() => !this.closed)
     this.config = null
     this.resourceData = {}
     this.resourceErrors = {}
-    this.resourceRequests = new Map()
     this.telemetry = null
     this.metricsError = null
     this.metricsRequest = null
@@ -331,6 +331,7 @@ export class Dashboard {
     if (this.context.app) await this.openApp(this.context.app, this.context.pipeline)
     else if (this.pipeline) await this.openPipeline(this.pipeline)
     else this.drawLanding()
+    if (this.closed) return
     const warnings = [...this.catalog.warnings, ...this.context.warnings ?? []]
     if (warnings.length) this.setStatus(warnings.join(' | '), 'warning')
     if (this.refresh && !this.closed) this.timer = setInterval(() => this.autoRefresh(), this.refresh * 1000)
@@ -469,6 +470,7 @@ export class Dashboard {
 
   clearApp() {
     this.generation++
+    this.readRequests.cancelAll()
     this.resetMetrics()
     this.resetResourceDetails()
     for (const key of ['app', 'pipeline', 'config']) this.loading.delete(key)
@@ -493,18 +495,19 @@ export class Dashboard {
     this.pipeline = pipeline
     const owner = pipeline.owner ?? this.catalog.pipelines.find(item => item.id === pipeline.id)?.owner
     this.breadcrumbTeam = owner?.type === 'team' ? this.catalog.teams.find(item => item.id === owner.id) ?? null : owner ? {name: 'Personal'} : null
-    const generation = this.generation
+    const request = this.readRequests.start('pipeline')
+    const {signal} = request.controller
     this.busy = true
     this.summary.setContent(`${badge('pipelines', pipeline.name)}\n\n${badge('refresh', 'Loading pipeline apps…', 'info')}`)
     this.main.setLabel(` ${icons.apps}  Pipeline apps `)
     this.setRows([])
     const finishLoading = this.beginLoading('pipeline', `Loading pipeline ${pipeline.name}…`)
     try {
-      const [appsResult, hierarchy] = await Promise.all([
-        this.api.pipelineApps(pipeline.id).then(apps => ({apps}), error => ({error})),
-        resolveHierarchy(this.api, this.catalog, {pipeline}),
-      ])
-      if (this.closed || generation !== this.generation) return
+      const [appsResult, hierarchy] = await withAbort(Promise.all([
+        withAbort(this.api.pipelineApps(pipeline.id, {signal}), signal).then(apps => ({apps}), error => ({error})),
+        resolveHierarchy(this.api, this.catalog, {pipeline, signal}),
+      ]), signal)
+      if (!request.current()) return
       this.pipeline = hierarchy.pipeline
       this.breadcrumbTeam = hierarchy.team
       if (appsResult.error) throw appsResult.error
@@ -526,13 +529,14 @@ export class Dashboard {
       this.message = `Pipeline loaded. Select an app and press Enter, or press A to add an app.${unavailable ? ` · ${unavailable} app${unavailable === 1 ? '' : 's'} unavailable; select their rows for details.` : ''}${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
       this.messageTone = unavailable || hierarchy.errors.hierarchy ? 'warning' : 'success'
     } catch (error) {
-      if (generation === this.generation) {
+      if (request.current()) {
         this.setRows([{icon: 'error', tone: 'error', label: 'Unable to load pipeline', detail: errorMessage(error)}])
         this.message = errorMessage(error)
         this.messageTone = 'error'
       }
     } finally {
-      if (generation === this.generation) { this.busy = false; this.render() }
+      if (request.current()) { this.busy = false; this.render() }
+      request.finish()
       finishLoading()
     }
   }
@@ -556,15 +560,16 @@ export class Dashboard {
   async loadApp(automatic = false, {forceResources = false} = {}) {
     if (!this.app || this.busy || this.closed) return false
     this.refreshPending = false
-    const generation = this.generation
+    const request = this.readRequests.start('app')
+    const {signal} = request.controller
     const app = this.app
     this.busy = true
     const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…`)
     try {
-      const data = await this.api.appData(app.id)
-      if (this.closed || generation !== this.generation) return
-      const hierarchy = await resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline})
-      if (this.closed || generation !== this.generation) return
+      const data = await withAbort(this.api.appData(app.id, {signal}), signal)
+      if (!request.current()) return
+      const hierarchy = await withAbort(resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline, signal}), signal)
+      if (!request.current()) return
       this.pipeline = hierarchy.pipeline
       this.breadcrumbTeam = hierarchy.team
       Object.assign(data.errors, hierarchy.errors)
@@ -579,14 +584,15 @@ export class Dashboard {
       void this.loadMetrics({refresh: true, force: !automatic})
       return true
     } catch (error) {
-      if (generation === this.generation) {
+      if (request.current()) {
         this.message = `${errorMessage(error)}${this.data ? ' · Showing previous snapshot.' : ''}`
         this.messageTone = 'error'
         if (!this.data) this.setRows([{icon: 'error', tone: 'error', label: 'Unable to load app', detail: errorMessage(error)}])
       }
       return false
     } finally {
-      if (generation === this.generation) { this.busy = false; this.render() }
+      if (request.current()) { this.busy = false; this.render() }
+      request.finish()
       finishLoading()
     }
   }
@@ -606,7 +612,7 @@ export class Dashboard {
   }
 
   resetMetrics() {
-    this.metricsRequest?.controller.abort()
+    this.readRequests.cancel('metrics')
     this.metricsRequest = null
     this.telemetry = null
     this.metricsError = null
@@ -630,26 +636,24 @@ export class Dashboard {
     const signature = metricsScope(this.data, this.metricsWindowHours)
     if (this.metricsRequest && !force) return
     if (!force && !refresh && this.metricsSignature === signature && Date.now() - this.metricsRequestedAt < 30_000) return
-    this.metricsRequest?.controller.abort()
-    const request = {controller: new AbortController()}
-    const generation = this.generation
+    const request = this.readRequests.start('metrics')
     this.metricsRequest = request
     this.metricsSignature = signature
     this.metricsRequestedAt = Date.now()
     this.metricsError = null
-    const current = () => !this.closed && generation === this.generation && this.metricsRequest === request && !request.controller.signal.aborted
     const finishLoading = this.beginLoading('metrics', `Loading performance metrics · ${metricsTimeframe(this.metricsWindowHours).label}…`)
     try {
-      const snapshot = await this.fetchMetrics(this.data, {signal: request.controller.signal, windowHours: this.metricsWindowHours})
-      if (!current()) return
+      const snapshot = await withAbort(this.fetchMetrics(this.data, {signal: request.controller.signal, windowHours: this.metricsWindowHours}), request.controller.signal)
+      if (!request.current()) return
       this.telemetry = snapshot
     } catch (error) {
-      if (current()) this.metricsError = errorMessage(error)
+      if (request.current()) this.metricsError = errorMessage(error)
     } finally {
-      if (current()) {
+      if (request.current()) {
         this.metricsRequest = null
         if (TABS[this.tab] === 'Metrics') this.drawApp({preserveScroll: true})
       }
+      request.finish()
       finishLoading()
     }
   }
@@ -657,32 +661,31 @@ export class Dashboard {
   resetResourceDetails() {
     this.resourceData = {}
     this.resourceErrors = {}
-    this.resourceRequests.clear()
-    for (const kind of ['dynos', 'addons']) this.loading.delete(`resources-${kind}`)
+    for (const kind of ['dynos', 'addons']) {
+      this.readRequests.cancel(`resources-${kind}`)
+      this.loading.delete(`resources-${kind}`)
+    }
     this.syncLoadingAnimation()
   }
 
   async loadResourceDetails({force = false} = {}) {
     const kind = {Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]]
     if (!kind || !this.resources?.available || !this.data || this.closed) return
-    if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.resourceRequests.has(kind))) return
+    if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.readRequests.has(`resources-${kind}`))) return
     const data = this.data
-    const generation = this.generation
-    const request = {}
-    this.resourceRequests.set(kind, request)
-    const current = () => !this.closed && generation === this.generation && this.data === data && this.resourceRequests.get(kind) === request
+    const request = this.readRequests.start(`resources-${kind}`, () => this.data === data)
+    const {signal} = request.controller
     const finishLoading = this.beginLoading(`resources-${kind}`, `Loading ${kind === 'dynos' ? 'dyno costs and allocations' : 'add-on costs and limits'}…`)
     try {
-      const result = await this.resources[kind](data, {force})
-      if (!current()) return
+      const result = await withAbort(this.resources[kind](data, {force, signal}), signal)
+      if (!request.current()) return
       this.resourceData[kind] = result
       delete this.resourceErrors[kind]
     } catch (error) {
-      if (!current()) return
+      if (!request.current()) return
       this.resourceErrors[kind] = errorMessage(error)
     } finally {
-      if (current()) {
-        this.resourceRequests.delete(kind)
+      if (request.current()) {
         if ({Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]] === kind) {
           // getScroll() includes Blessed's cursor offset; childBase is the
           // actual first visible line that should survive this redraw.
@@ -692,6 +695,7 @@ export class Dashboard {
           this.render()
         }
       }
+      request.finish()
       finishLoading()
     }
   }
@@ -773,21 +777,22 @@ export class Dashboard {
 
   async loadConfig() {
     if (!this.app || this.closed) return
-    const generation = this.generation
-    const sequence = this.configSequence = (this.configSequence ?? 0) + 1
+    const request = this.readRequests.start('config')
+    const {signal} = request.controller
     const finishLoading = this.beginLoading('config', `Loading config vars for ${this.app.name}…`)
     try {
-      const config = await this.api.config(this.app.id)
-      if (this.closed || generation !== this.generation || sequence !== this.configSequence) return
+      const config = await withAbort(this.api.config(this.app.id, {signal}), signal)
+      if (!request.current()) return
       this.config = config
       this.configError = null
     } catch (error) {
-      if (generation !== this.generation || sequence !== this.configSequence) return
+      if (!request.current()) return
       this.configError = errorMessage(error)
     } finally {
+      if (request.current()) this.drawApp()
+      request.finish()
       finishLoading()
     }
-    this.drawApp()
   }
 
   async back() {
@@ -806,24 +811,27 @@ export class Dashboard {
   }
 
   async reload() {
-    if (this.busy) return
+    if (this.busy || this.closed) return
     if (this.app) {
+      const generation = this.generation
+      const appId = this.app.id
       this.revealed.clear()
       await this.loadApp(false, {forceResources: true})
-      if (TABS[this.tab] === 'Config') await this.loadConfig()
+      if (!this.closed && generation === this.generation && this.app?.id === appId && TABS[this.tab] === 'Config') await this.loadConfig()
     } else if (this.pipeline) await this.openPipeline(this.pipeline)
     else {
-      const sequence = ++this.navGeneration
+      const request = this.readRequests.start('catalog')
+      const {signal} = request.controller
       this.setStatus('Refreshing teams, pipelines, and apps…')
       const finishLoading = this.beginLoading('catalog', 'Refreshing teams, pipelines, and apps…')
       try {
-        const catalog = await this.api.catalog()
-        if (this.closed || sequence !== this.navGeneration) return
+        const catalog = await withAbort(this.api.catalog({signal}), signal)
+        if (!request.current()) return
         this.catalog = catalog
         this.drawNav()
         this.setStatus(catalog.warnings.join(' | ') || 'Workspace refreshed.', catalog.warnings.length ? 'warning' : 'success')
-      } catch (error) { this.setStatus(errorMessage(error), 'error') }
-      finally { finishLoading() }
+      } catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error') }
+      finally { request.finish(); finishLoading() }
     }
   }
 
@@ -922,6 +930,8 @@ export class Dashboard {
     let pipeline = this.pipeline
     const generation = this.generation
     const current = () => !this.closed && this.generation === generation && !this.app && this.pipeline?.id === pipeline.id
+    const request = this.readRequests.start('app-options', current)
+    const {signal} = request.controller
     const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
       content: `\n  ${badge('refresh', 'Loading Add App options…', 'info')}`})
     this.modal = loading
@@ -929,15 +939,15 @@ export class Dashboard {
     const finishLoading = this.beginLoading('app-options', 'Loading runtime regions…')
     let regions
     try {
-      const [available, details] = await Promise.all([
-        this.api.appRegions(),
-        Object.hasOwn(pipeline, 'owner') ? pipeline : this.api.get(`/pipelines/${encodeURIComponent(pipeline.id)}`),
-      ])
+      const [available, details] = await withAbort(Promise.all([
+        this.api.appRegions({signal}),
+        Object.hasOwn(pipeline, 'owner') ? pipeline : this.api.get(`/pipelines/${encodeURIComponent(pipeline.id)}`, {signal}),
+      ]), signal)
       regions = available
       pipeline = details
       if (!regions.length) throw new Error('No Common Runtime regions are available.')
-    } catch (error) { this.setStatus(errorMessage(error), 'error'); return }
-    finally { loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    } catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error'); return }
+    finally { request.finish(); loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
     if (!current()) return
     const title = `Add App · ${pipeline.name}`
     const stage = await this.choose(`${title} · Stage`, 'Choose the pipeline stage for the new app.',
@@ -994,6 +1004,8 @@ export class Dashboard {
     const appContext = Boolean(this.app)
     const current = () => !this.closed && this.generation === generation && this.pipeline?.id === pipeline.id
       && (this.app?.id ?? this.rows[this.main.selected]?.value?.id) === selected.id
+    const request = this.readRequests.start('promotion-options', current)
+    const {signal} = request.controller
     const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
       content: `\n  ${badge('refresh', 'Loading promotion destinations…', 'info')}`})
     this.modal = loading
@@ -1001,11 +1013,11 @@ export class Dashboard {
     const finishLoading = this.beginLoading('promotion-options', 'Loading promotion destinations…')
     let apps
     try {
-      apps = await this.api.pipelineApps(pipeline.id)
+      apps = await withAbort(this.api.pipelineApps(pipeline.id, {signal}), signal)
       if (apps.some(app => app.loadError)) throw new Error('Some pipeline apps are unavailable. Refresh the pipeline before promoting.')
     }
-    catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
-    finally { loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error'); return }
+    finally { request.finish(); loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
     if (!current()) return
     const source = apps.find(app => app.id === selected.id)
     const sourceIndex = APP_STAGES.indexOf(source?.stage)
@@ -1220,16 +1232,18 @@ export class Dashboard {
     const generation = this.generation
     const current = () => !this.closed && generation === this.generation && this.app?.id === destination.id && this.pipeline?.id === pipeline.id
     const load = async (label, action) => {
+      const request = this.readRequests.start('config-clone-read', current)
+      const {signal} = request.controller
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
         content: `\n  ${badge('refresh', label, 'info')}`})
       this.modal = modal
       this.busy = true
       const finishLoading = this.beginLoading('config-clone', label)
-      try { return await action() }
-      finally { modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+      try { return await withAbort(action({signal}), signal) }
+      finally { request.finish(); modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
     }
     let apps
-    try { apps = await load('Loading source apps…', () => this.api.pipelineApps(pipeline.id)) }
+    try { apps = await load('Loading source apps…', options => this.api.pipelineApps(pipeline.id, options)) }
     catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
     if (!current()) return
     const sources = apps.filter(app => app.id !== destination.id && !app.loadError)
@@ -1243,7 +1257,7 @@ export class Dashboard {
       sources.map(app => ({label: `${app.name} · ${app.stage}`, value: app})))
     if (source === null || !current()) return
     let plan
-    try { plan = await load('Preparing config clone…', () => this.api.prepareConfigClone({pipeline, source, destination})) }
+    try { plan = await load('Preparing config clone…', options => this.api.prepareConfigClone({pipeline, source, destination}, options)) }
     catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
     if (!current()) return
     const count = Object.keys(plan.values).length
@@ -1489,6 +1503,8 @@ export class Dashboard {
     const attachment = addon ? this.data?.attachments.find(item => item.addon.id === addon.id) : null
     const current = () => !this.closed && generation === this.generation && this.tab === tab
       && this.app?.id === app?.id && (!addon || this.rows[this.main.selected]?.value?.id === addon.id)
+    const request = this.readRequests.start('browser', current)
+    const {signal} = request.controller
     let url
     if (app && !addon) {
       const path = ['activity', 'resources', 'resources', 'settings', 'settings', 'activity', 'metrics'][tab]
@@ -1501,13 +1517,13 @@ export class Dashboard {
     const name = addon?.name ?? attachment?.name ?? 'selected add-on'
     const finishLoading = this.beginLoading('browser', addon ? `Opening ${name} management dashboard…` : 'Opening Heroku dashboard…')
     try {
-      if (addon) url = await this.api.addonDashboardUrl(addon, attachment, app)
-      if (!current()) return
+      if (addon) url = await withAbort(this.api.addonDashboardUrl(addon, attachment, app, {signal}), signal)
+      if (!request.current()) return
       await this.openURL(url)
-      if (current()) this.setStatus(addon ? `Opened ${name} management dashboard in your browser.` : 'Opened Heroku dashboard in your browser.', 'success')
+      if (request.current()) this.setStatus(addon ? `Opened ${name} management dashboard in your browser.` : 'Opened Heroku dashboard in your browser.', 'success')
     } catch (error) {
-      if (current()) this.setStatus(`Unable to open browser: ${errorMessage(error)}`, 'error')
-    } finally { this.openingBrowser = false; finishLoading() }
+      if (request.current()) this.setStatus(`Unable to open browser: ${errorMessage(error)}`, 'error')
+    } finally { request.finish(); this.openingBrowser = false; finishLoading() }
   }
 
   help() {
@@ -1525,7 +1541,7 @@ export class Dashboard {
   close() {
     if (this.closed) return
     this.closed = true
-    this.metricsRequest?.controller.abort()
+    this.readRequests.cancelAll()
     this.metricsRequest = null
     this.commandRequest?.controller.abort()
     this.commandRequest = null
