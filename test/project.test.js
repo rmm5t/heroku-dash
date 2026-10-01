@@ -82,3 +82,51 @@ test('inaccessible remote produces a warning and permits directory fallback', as
   assert.equal(result.pipeline.id, 'p1')
   assert.match(result.warnings[0], /old: Forbidden/)
 })
+
+test('explicit and detected pipelines automatically select their owning team', async () => {
+  const team = {id: 't1', name: 'pipeline-team'}
+  const pipeline = {id: 'p1', name: 'repository', owner: {type: 'team', id: team.id}}
+  const catalog = {teams: [{id: 't2', name: 'other-team'}, team], pipelines: [pipeline]}
+  const api = {
+    async get() { return {id: 'app-id', name: 'app'} },
+    async coupling() { return {pipeline: {id: pipeline.id, name: pipeline.name}} },
+  }
+  for (const [options, project] of [
+    [{pipeline: pipeline.name}, {}],
+    [{pipeline: pipeline.id}, {}],
+    [{}, {name: pipeline.name}],
+    [{}, {remotes: [{app: 'production'}, {app: 'staging'}]}],
+  ]) {
+    const context = await resolveContext(api, catalog, options, project)
+    assert.equal(context.pipeline.id, pipeline.id)
+    assert.equal(context.team, team)
+    assert.equal(context.app, undefined)
+  }
+})
+
+test('personal and ownerless pipelines do not select a team', async () => {
+  const team = {id: 'owner-id', name: 'unrelated-team'}
+  for (const owner of [{type: 'user', id: team.id}, null, undefined]) {
+    const pipeline = {id: 'personal', name: 'repository', owner}
+    const catalog = {teams: [team], pipelines: [pipeline]}
+    const api = {
+      async get() { return {id: 'app-id'} },
+      async coupling() { return {pipeline: {id: pipeline.id}} },
+    }
+    for (const [options, project] of [
+      [{pipeline: pipeline.id}, {}],
+      [{}, {name: pipeline.name}],
+      [{}, {remotes: [{app: 'app'}]}],
+    ]) {
+      const context = await resolveContext(api, catalog, options, project)
+      assert.equal(context.pipeline.id, pipeline.id)
+      assert.equal(context.team, undefined)
+    }
+  }
+})
+
+test('pipeline team filtering can use the owner ID when the team catalog is unavailable', async () => {
+  const pipeline = {id: 'p1', name: 'repository', owner: {type: 'team', id: 'team-id'}}
+  const context = await resolveContext(api, {teams: [], pipelines: [pipeline]}, {pipeline: pipeline.id})
+  assert.deepEqual(context.team, {id: 'team-id', name: 'team-id'})
+})

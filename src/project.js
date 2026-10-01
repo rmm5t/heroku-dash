@@ -35,6 +35,14 @@ export function uniquePipeline(pipelines, nameOrId) {
 export async function resolveContext(api, catalog, options = {}, project = {}) {
   const team = options.team ? catalog.teams?.find(team => team.id === options.team || team.name === options.team) : undefined
   if (options.team && !team) throw new Error(`Team not found: ${options.team}`)
+  const byPipeline = pipeline => {
+    // Git couplings may omit ownership; prefer the catalog's pipeline metadata.
+    const owner = (catalog.pipelines.find(item => item.id === pipeline.id) ?? pipeline).owner
+    const pipelineTeam = team ?? (owner?.type === 'team' && owner.id
+      ? catalog.teams?.find(item => item.id === owner.id) ?? {id: owner.id, name: owner.name ?? owner.id}
+      : undefined)
+    return {pipeline, ...(pipelineTeam ? {team: pipelineTeam} : {})}
+  }
   const byApp = async name => {
     const app = await api.get(`/apps/${encodeURIComponent(name)}`)
     const coupling = await api.coupling(app.id)
@@ -46,7 +54,7 @@ export async function resolveContext(api, catalog, options = {}, project = {}) {
     if (team && !pipelines.some(pipeline => pipeline.id === options.pipeline || pipeline.name === options.pipeline)) {
       throw new Error(`Pipeline not found in team ${team.name}: ${options.pipeline}`)
     }
-    return {pipeline: uniquePipeline(pipelines, options.pipeline), ...(team ? {team} : {}), reason: 'Explicit pipeline'}
+    return {...byPipeline(uniquePipeline(pipelines, options.pipeline)), reason: 'Explicit pipeline'}
   }
   if (options.remote) {
     const remote = project.remotes?.find(r => r.remote === options.remote)
@@ -67,12 +75,12 @@ export async function resolveContext(api, catalog, options = {}, project = {}) {
   const pipelineIds = new Set(contexts.map(c => c.pipeline?.id).filter(Boolean))
   if (pipelineIds.size === 1) {
     const context = contexts.find(c => c.pipeline)
-    return {pipeline: context.pipeline, reason: 'Pipeline from Git remotes', warnings}
+    return {...byPipeline(context.pipeline), reason: 'Pipeline from Git remotes', warnings}
   }
   if (pipelineIds.size > 1) return {reason: 'Git remotes span multiple pipelines; choose one, or use --remote.', warnings}
   if (project.name) {
     const matches = catalog.pipelines.filter(p => p.name === project.name)
-    if (matches.length === 1) return {pipeline: matches[0], reason: 'Pipeline matches repository name', warnings}
+    if (matches.length === 1) return {...byPipeline(matches[0]), reason: 'Pipeline matches repository name', warnings}
     if (matches.length > 1) return {reason: 'Repository matches multiple pipelines; choose one, or use --pipeline ID.', warnings}
   }
   if (contexts.length === 1) return {...contexts[0], reason: 'App from Git remote', warnings}

@@ -170,6 +170,40 @@ test('combined environment defaults open the selected pipeline and scope pipelin
   assert.equal(dashboard.pipeline.id, pipeline.id)
 })
 
+test('pipeline options and detection automatically select the team and filter app navigation', async t => {
+  const setEnv = dashEnvironment(t)
+  for (const source of ['cli', 'env', 'repository', 'remotes']) {
+    const demo = createDemo()
+    const team = demo.catalog.teams[0]
+    const pipeline = demo.context.pipeline
+    const otherTeam = {id: 'other-team', name: 'other-team'}
+    const outsidePipeline = {id: 'outside-pipeline', name: 'outside-pipeline', owner: {id: otherTeam.id, type: 'team'}}
+    demo.catalog.teams.unshift(otherTeam)
+    demo.catalog.pipelines.unshift(outsidePipeline)
+    demo.catalog.apps = [...demo.catalog.apps, {...demo.catalog.apps[0], id: 'outside-app', name: 'outside-app', team: otherTeam}]
+    demo.api.get = async () => demo.catalog.apps[0]
+    demo.api.coupling = async () => ({pipeline: {id: pipeline.id, name: pipeline.name}})
+    setEnv(source === 'env' ? {HEROKU_DASH_PIPELINE: pipeline.name} : {})
+    const {flags} = await parseOptions(source === 'cli' ? ['--pipeline', pipeline.name] : [])
+    const project = source === 'repository' ? {name: pipeline.name}
+      : source === 'remotes' ? {remotes: [{app: demo.catalog.apps[0].name}]} : {}
+    const context = await resolveContext(demo.api, demo.catalog, flags, project)
+    const io = terminal(t)
+    const dashboard = new Dashboard({...demo, context, screen: io.screen, refresh: 0})
+    t.after(() => dashboard.close())
+    await dashboard.start()
+    assert.equal(dashboard.team.id, team.id)
+    assert.equal(dashboard.pipeline.id, pipeline.id)
+    assert.deepEqual(dashboard.navItems.map(item => item.id), [pipeline.id])
+    dashboard.setMode('teams')
+    assert.equal(dashboard.navItems[dashboard.nav.selected].id, team.id)
+    dashboard.setMode('apps')
+    assert.ok(dashboard.navItems.length > 0)
+    assert.ok(dashboard.navItems.every(app => app.team.id === team.id))
+    assert.equal(dashboard.pipeline.id, pipeline.id)
+  }
+})
+
 test('startup detects a light terminal before rendering and restores raw mode on exit', {timeout: 2000}, async t => {
   const io = terminal(t, '\x1b]11;rgb:ffff/ffff/ffff\x1b\\')
   const running = runDashboard({...createDemo(), screen: io.screen, refresh: 0})

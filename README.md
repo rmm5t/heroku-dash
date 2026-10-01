@@ -98,6 +98,8 @@ heroku dash --demo --theme light
 
 When remotes span multiple pipelines, the browser asks you to choose one. Use `--remote` to disambiguate. Duplicate pipeline names can be selected by ID with `--pipeline`.
 
+A pipeline selected at startup through `--pipeline`, `HEROKU_DASH_PIPELINE`, or repository detection automatically selects its owning team, filtering the sidebar's pipelines and apps to that team. Personal pipelines keep the all-teams/personal scope.
+
 ### Workspace
 
 The left sidebar browses teams, pipelines, or apps. Choosing a team scopes its pipelines and apps; **All teams / personal** clears the scope. Pipelines list apps ordered by stage. Open an app to see its seven views, with a selectable resource list above a scrollable details pane.
@@ -112,7 +114,7 @@ Overview, Resources, Add-ons, Settings, and Metrics use aligned tables with fixe
 
 Resources groups dynos directly beneath their process type, with indented names in natural order (`web.1`, `web.2`, `web.10`). Active process groups (Qty > 0) appear first, followed by **Other dynos** for one-off and unmatched instances, then inactive process groups (Qty = 0) at the bottom. Each group's child dynos stay with their process. Select a process row to scale, stop by scaling to zero, or restart all its dynos; select a child dyno to restart that specific instance.
 
-The heading shows the resource hierarchy: **team › pipeline › app**, including when you open an app or pipeline directly. Personal resources use **Personal**, and apps without a pipeline use **No pipeline**. Opening a resource resolves its parents without changing the sidebar's team filter.
+The heading shows the resource hierarchy: **team › pipeline › app**, including when you open an app or pipeline directly. Personal resources use **Personal**, and apps without a pipeline use **No pipeline**. Once running, opening a resource resolves its parents without changing the sidebar's team filter.
 
 Nerd Font icons identify teams, pipelines, apps, process types, databases, and the app views. **Green** indicates healthy/successful states, **amber** indicates pending states or maintenance, **red** indicates failures, and **gray** indicates inactive or unknown states. Keyboard shortcuts are highlighted in **purple** throughout the UI, including inline hints, selected rows, dialogs, and help. Config rows use a lock for masked values and an amber eye for revealed values. Status text remains visible alongside icons and colors.
 
