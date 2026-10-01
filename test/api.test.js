@@ -3,7 +3,7 @@ import {getEventListeners} from 'node:events'
 import {Agent, createServer} from 'node:http'
 import test from 'node:test'
 import {HTTP} from '@heroku/http-call'
-import {errorMessage, HerokuAPI, normalizeHostname} from '../src/api.js'
+import {errorMessage, HerokuAPI, normalizeHostname, retryAfterMs} from '../src/api.js'
 
 test('app data publishes independent section snapshots while retaining the complete snapshot API', async () => {
   const releases = Promise.withResolvers()
@@ -54,6 +54,46 @@ test('canceling a progressive app read prevents further section notifications', 
   late.reject(new Error('Late transport failure'))
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(updates.length, 1)
+})
+
+test('selective app reads preserve unchanged metadata and the previous snapshot while refreshing operational data', async () => {
+  const calls = []
+  const api = new HerokuAPI({async request(path, options) {
+    calls.push(path)
+    assert.equal(options.previous, undefined)
+    assert.equal(options.sections, undefined)
+    if (path === '/apps/app') return {body: {id: 'app', name: 'current-name'}}
+    if (path.endsWith('/dynos')) throw Object.assign(new Error('Unavailable'), {statusCode: 503})
+    return {body: [{type: 'web', quantity: 2}]}
+  }})
+  const previous = {app: {id: 'app', name: 'old-name'}, formation: [], dynos: [{name: 'web.1'}],
+    domains: [{hostname: 'example.com'}], buildpacks: [], errors: {formation: 'Old error'}, failures: {formation: {statusCode: 500}},
+    sectionFetchedAt: {domains: 123}}
+  const current = await api.appData('app', {previous, sections: ['app', 'formation', 'dynos']})
+  assert.deepEqual(calls, ['/apps/app', '/apps/app/formation', '/apps/app/dynos'])
+  assert.equal(current.app.name, 'current-name')
+  assert.equal(previous.app.name, 'old-name')
+  assert.deepEqual(current.domains, previous.domains)
+  assert.equal(current.sectionFetchedAt.domains, 123)
+  assert.ok(current.sectionFetchedAt.formation)
+  assert.equal(current.errors.formation, undefined)
+  assert.equal(current.failures.formation, undefined)
+  assert.deepEqual(current.dynos, previous.dynos)
+  assert.match(current.errors.dynos, /Showing previous data/)
+  assert.equal(current.failures.dynos.statusCode, 503)
+  assert.equal(previous.errors.dynos, undefined)
+})
+
+test('Retry-After supports seconds and HTTP dates, and app lookup failures retain retry metadata', async () => {
+  assert.equal(retryAfterMs({headers: {'Retry-After': '90'}}, 0), 90_000)
+  assert.equal(retryAfterMs({response: {headers: {'retry-after': 'Thu, 01 Jan 1970 00:02:00 GMT'}}}, 30_000), 90_000)
+  assert.equal(retryAfterMs({headers: {'retry-after': 'invalid'}}, 0), undefined)
+  assert.equal(retryAfterMs({headers: {'retry-after': '-1'}}, 0), undefined)
+  const api = new HerokuAPI({async request(path) {
+    if (path === '/apps/app') throw Object.assign(new Error('Rate limited'), {statusCode: 429, headers: {'retry-after': '90'}})
+    return {body: []}
+  }})
+  await assert.rejects(api.appData('app'), error => error.statusCode === 429 && error.retryAfterMs === 90_000)
 })
 
 test('list follows Next-Range and preserves headers', async () => {

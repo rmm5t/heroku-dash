@@ -1,4 +1,4 @@
-import {errorMessage, statusCode} from './api.js'
+import {errorMessage, retryAfterMs, statusCode} from './api.js'
 
 export const METRICS_HOST = 'https://api.metrics.heroku.com'
 export const METRICS_WINDOW_MS = 2 * 60 * 60_000
@@ -60,6 +60,7 @@ export async function fetchTelemetry(api, data, {now = Date.now(), signal, windo
     router: {status: null, latency: null},
     processes: Object.fromEntries(processes.map(process => [process.type, {memory: null, load: null}])),
     errors: {},
+    failures: {},
   }
   const jobs = []
   const add = (key, route, process, target, field) => {
@@ -114,6 +115,7 @@ export async function fetchTelemetry(api, data, {now = Date.now(), signal, windo
       } catch (error) {
         if (signal?.aborted) return
         result.errors[job.key] = errorMessage(error)
+        result.failures[job.key] = {statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}
         if (statusCode(error) === 429) rateLimit = result.errors[job.key]
       }
     }

@@ -4,6 +4,7 @@ import {setTimeout as delay} from 'node:timers/promises'
 import test from 'node:test'
 import blessed from 'blessed'
 import {createDemo, demoTelemetry} from '../src/demo.js'
+import {RefreshBackoff} from '../src/refresh-policy.js'
 import {Dashboard} from '../src/ui/dashboard.js'
 import {clean} from '../src/ui/text.js'
 import {icons, palette} from '../src/ui/theme.js'
@@ -381,6 +382,129 @@ test('a custom command cannot let a pre-command read repopulate an invalidated s
   await refreshing
   assert.equal(d.appSnapshots.get(app.id), null)
   await key('\x1b')
+})
+
+test('automatic reads refresh operational sections, reuse metadata, and R always requests the full snapshot', async t => {
+  let now = 1000
+  t.mock.method(Date, 'now', () => now)
+  const p = await progressiveApp(t)
+  const {dashboard: d} = p
+  await p.finish()
+  const domains = d.data.domains
+  const calls = []
+  const request = d.api.client.request.bind(d.api.client)
+  d.api.client.request = (path, options) => { calls.push(path); return request(path, options) }
+  now += 60_000
+  await d.loadApp(true)
+  assert.deepEqual(calls.map(path => path.split('/').at(-1)), [d.app.id, 'formation', 'dynos', 'releases'])
+  assert.equal(d.data.domains, domains)
+  calls.length = 0
+  now += 300_000
+  await d.loadApp(true)
+  assert.equal(calls.length, 9)
+  calls.length = 0
+  await d.reload()
+  assert.equal(calls.length, 9)
+})
+
+test('selective refresh replaces an unfinished parent lookup rather than abandoning its breadcrumbs', async t => {
+  const p = await progressiveApp(t)
+  const {dashboard: d} = p
+  p.snapshot.app.team = null
+  p.snapshot.coupling = {pipeline: {id: 'slow-parent', name: 'Slow parent'}}
+  const parents = []
+  const request = d.api.client.request.bind(d.api.client)
+  d.api.client.request = (path, options) => {
+    if (path !== '/pipelines/slow-parent') return request(path, options)
+    const pending = Promise.withResolvers()
+    parents.push({...pending, signal: options.signal})
+    return pending.promise
+  }
+  await p.finish()
+  assert.equal(parents.length, 1)
+  await d.loadApp(true)
+  assert.equal(parents.length, 2)
+  assert.equal(parents[0].signal.aborted, true)
+  parents[1].resolve({body: {id: 'slow-parent', name: 'Resolved parent', owner: {type: 'user', id: 'owner'}}})
+  parents[0].resolve({body: {id: 'slow-parent', name: 'Old parent'}})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.pipeline.name, 'Resolved parent')
+  assert.equal(d.breadcrumbTeam.name, 'Personal')
+})
+
+test('automatic refresh honors rate-limit cooldowns across focus changes while manual R bypasses the pause', async t => {
+  const {dashboard: d, screen} = await harness(t, {refresh: 10})
+  await d.openApp(d.catalog.apps[0])
+  let now = 0
+  d.refreshBackoff = new RefreshBackoff({interval: 10_000, now: () => now})
+  const appData = d.api.appData.bind(d.api)
+  let fail = true
+  let reads = 0
+  d.api.appData = async (...args) => {
+    reads++
+    if (fail) throw Object.assign(new Error('Rate limited'), {statusCode: 429, headers: {'retry-after': '90'}})
+    return appData(...args)
+  }
+  await d.loadApp(true)
+  assert.equal(d.refreshBackoff.remaining, 90_000)
+  assert.match(d.message, /Auto-refresh paused for 90s/)
+  d.autoRefresh()
+  screen.program.emit('blur')
+  d.autoRefresh()
+  screen.program.emit('focus')
+  assert.equal(reads, 1)
+  await d.reload()
+  assert.equal(reads, 2)
+  fail = false
+  now = 90_000
+  d.autoRefresh()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(reads, 3)
+  assert.equal(d.refreshBackoff.remaining, 0)
+})
+
+test('partial section failures delay automatic refresh and remain retryable on the next pass', async t => {
+  const p = await progressiveApp(t)
+  const {dashboard: d} = p
+  await p.finish()
+  d.refresh = 10
+  let now = 0
+  d.refreshBackoff = new RefreshBackoff({interval: 10_000, now: () => now})
+  const request = d.api.client.request.bind(d.api.client)
+  let fail = true
+  let reads = 0
+  d.api.client.request = (path, options) => {
+    reads++
+    if (fail && path.endsWith('/formation')) return Promise.reject(Object.assign(new Error('Unavailable'), {statusCode: 503}))
+    return request(path, options)
+  }
+  await d.loadApp(true)
+  assert.equal(d.refreshBackoff.remaining, 10_000)
+  assert.ok(d.data.formation.length)
+  assert.match(d.data.errors.formation, /Showing previous data/)
+  const count = reads
+  d.autoRefresh()
+  assert.equal(reads, count)
+  now = 10_000
+  await d.loadApp(true)
+  assert.equal(d.refreshBackoff.remaining, 20_000)
+  fail = false
+  now = 30_000
+  await d.loadApp(true)
+  assert.equal(d.data.errors.formation, undefined)
+  assert.equal(d.refreshBackoff.remaining, 0)
+})
+
+test('Platform refresh success does not erase a Metrics API cooldown', async t => {
+  const {dashboard: d, key} = await harness(t, {refresh: 10})
+  await d.openApp(d.catalog.apps[0])
+  d.fetchMetrics = async data => ({...demoTelemetry(data), failures: {router: {statusCode: 429, retryAfterMs: 90_000}}})
+  await key('7')
+  assert.ok(d.refreshBackoff.remaining > 80_000)
+  await key('1')
+  await d.reload()
+  assert.ok(d.refreshBackoff.remaining > 80_000)
+  assert.match(d.message, /Auto-refresh paused/)
 })
 
 test('partial pipeline loads show unavailable rows while accessible apps still open and retries recover', async t => {

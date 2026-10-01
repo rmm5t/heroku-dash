@@ -2,11 +2,12 @@ import blessed from 'blessed'
 import clipboard from 'clipboardy'
 import {openExternalURL} from '../browser.js'
 import packageJSON from '../../package.json' with {type: 'json'}
-import {APP_STAGES, errorMessage, normalizeHostname, validateAppName} from '../api.js'
+import {APP_STAGES, errorMessage, normalizeHostname, retryAfterMs, statusCode, validateAppName} from '../api.js'
 import {AppSnapshotCache} from '../app-snapshot-cache.js'
 import {executeHerokuCommand, executeInteractiveHerokuCommand, formatHerokuCommand, isInteractiveHerokuCommand, scopedHerokuCommand} from '../heroku-command.js'
 import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
+import {autoRefreshSections, RefreshBackoff} from '../refresh-policy.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
 import {age, ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
@@ -191,6 +192,7 @@ export class Dashboard {
     this.loadingTimer = null
     this.terminalFocused = true
     this.refreshPending = false
+    this.refreshBackoff = new RefreshBackoff({interval: refresh * 1000})
     this.closed = false
     this.filter = ''
     this.message = context.reason
@@ -345,11 +347,17 @@ export class Dashboard {
     if (!this.app || this.closed) return
     if (!this.terminalFocused) { this.refreshPending = true; return }
     if (this.modal || this.busy || this.readRequests.has('app')) return
+    if (this.refreshBackoff.remaining) return
     this.refreshPending = false
     void this.loadApp(true)
   }
 
   setStatus(message, tone = 'info') { this.message = single(message); this.messageTone = tone; this.render() }
+
+  recordRefreshResult(source, failures) {
+    const remaining = this.refreshBackoff.record(source, failures)
+    return this.refresh && remaining ? ` · Auto-refresh paused for ${Math.ceil(remaining / 1000)}s.` : ''
+  }
 
   beginLoading(key, label) {
     if (this.closed) return () => {}
@@ -575,10 +583,12 @@ export class Dashboard {
     const {signal} = request.controller
     const app = this.app
     const initial = !this.data
+    const previous = automatic && this.data && !this.data.pending?.length ? this.data : undefined
+    const sections = previous ? autoRefreshSections(previous) : undefined
     let progressive
     const finishLoading = this.beginLoading('app', `${this.data ? 'Refreshing' : 'Loading'} app ${app.name}…${this.cachedSnapshot ? ` · cached snapshot ${age(this.data.fetchedAt)} old` : ''}`)
     try {
-      const data = await withAbort(this.api.appData(app.id, {signal, onUpdate: snapshot => {
+      const data = await withAbort(this.api.appData(app.id, {signal, previous, sections, onUpdate: snapshot => {
         if (!initial || !request.current() || !snapshot.app) return
         // Keep the snapshot identity stable so unrelated sections completing
         // cannot invalidate in-flight resource enrichment or telemetry.
@@ -593,8 +603,14 @@ export class Dashboard {
         void this.loadMetrics()
       }}), signal)
       if (!request.current()) return
-      this.pipeline = data.coupling?.pipeline ?? null
-      this.breadcrumbTeam = data.app.team ?? null
+      const hierarchyChanged = !previous || sections.includes('coupling')
+        || this.readRequests.has('hierarchy') || Boolean(previous.errors.hierarchy)
+        || data.app.team?.id !== previous.app.team?.id || data.app.team?.name !== previous.app.team?.name
+      if (hierarchyChanged) {
+        this.pipeline = data.coupling?.pipeline ?? null
+        this.breadcrumbTeam = data.app.team ?? null
+      }
+      else delete data.errors.hierarchy
       if (!progressive) this.resetResourceDetails()
       this.data = progressive ? Object.assign(progressive, data, {pending: []}) : data
       this.cachedSnapshot = false
@@ -603,14 +619,16 @@ export class Dashboard {
       if (this.metricsSignature && this.metricsSignature !== metricsScope(data, this.metricsWindowHours)) this.resetMetrics()
       this.message = `${automatic ? 'Auto-refreshed' : 'Updated'} ${new Date(data.fetchedAt).toLocaleTimeString()}${Object.keys(data.errors).length ? ' · Some sections unavailable; see Overview.' : ''}`
       this.messageTone = Object.keys(data.errors).length ? 'warning' : 'success'
+      this.message += this.recordRefreshResult('app', Object.values(data.failures ?? {}))
       this.drawApp({preserveScroll: Boolean(progressive) || automatic && TABS[this.tab] === 'Metrics'})
-      void this.loadAppHierarchy(this.data)
+      if (hierarchyChanged) void this.loadAppHierarchy(this.data)
       void this.loadResourceDetails({force: forceResources})
       void this.loadMetrics({refresh: !progressive, force: !progressive && !automatic})
       return true
     } catch (error) {
       if (request.current()) {
         this.message = `${errorMessage(error)}${this.data ? ' · Showing previous snapshot.' : ''}`
+        this.message += this.recordRefreshResult('app', [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
         this.messageTone = 'error'
         if (!this.data) {
           this.appError = errorMessage(error)
@@ -643,6 +661,7 @@ export class Dashboard {
       if (!request.current()) return
       this.pipeline = hierarchy.pipeline
       this.breadcrumbTeam = hierarchy.team
+      delete data.errors.hierarchy
       Object.assign(data.errors, hierarchy.errors)
       if (hierarchy.errors.hierarchy) {
         this.message = `${this.message} · ${hierarchy.errors.hierarchy}`
@@ -717,8 +736,18 @@ export class Dashboard {
       const snapshot = await withAbort(this.fetchMetrics(this.data, {signal: request.controller.signal, windowHours: this.metricsWindowHours}), request.controller.signal)
       if (!request.current()) return
       this.telemetry = snapshot
+      const failures = Object.values(snapshot.failures ?? {})
+      const pause = this.recordRefreshResult('metrics', failures)
+      if (failures.length && pause) {
+        this.message = `Some performance metrics unavailable.${pause}`
+        this.messageTone = 'warning'
+      }
     } catch (error) {
-      if (request.current()) this.metricsError = errorMessage(error)
+      if (request.current()) {
+        this.metricsError = errorMessage(error)
+        const pause = this.recordRefreshResult('metrics', [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
+        if (pause) { this.message = `${this.metricsError}${pause}`; this.messageTone = 'warning' }
+      }
     } finally {
       if (request.current()) {
         this.metricsRequest = null
@@ -753,9 +782,12 @@ export class Dashboard {
       if (!request.current()) return
       this.resourceData[kind] = result
       delete this.resourceErrors[kind]
+      this.recordRefreshResult(`resources-${kind}`, [])
     } catch (error) {
       if (!request.current()) return
       this.resourceErrors[kind] = errorMessage(error)
+      const pause = this.recordRefreshResult(`resources-${kind}`, [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
+      if (pause) { this.message = `${this.resourceErrors[kind]}${pause}`; this.messageTone = 'warning' }
     } finally {
       if (request.current()) {
         if ({Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]] === kind) {

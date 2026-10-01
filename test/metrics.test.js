@@ -167,8 +167,10 @@ test('requests are bounded and cancellation or rate limits stop queued work', as
   await loading
   assert.equal(calls, 4)
   calls = 0
-  const limited = await fetchTelemetry({async get() { calls++; throw {statusCode: 429} }}, data)
+  const limited = await fetchTelemetry({async get() { calls++; throw {statusCode: 429, headers: {'retry-after': '90'}} }}, data)
   assert.equal(calls, 4)
   assert.equal(Object.keys(limited.errors).length, 6)
   assert.ok(Object.values(limited.errors).every(message => message.includes('rate limit')))
+  assert.equal(Object.keys(limited.failures).length, 4)
+  assert.ok(Object.values(limited.failures).every(failure => failure.statusCode === 429 && failure.retryAfterMs === 90_000))
 })

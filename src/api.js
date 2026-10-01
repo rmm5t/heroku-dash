@@ -43,6 +43,17 @@ export function statusCode(error) {
   return error.statusCode ?? error.status ?? error.response?.statusCode ?? error.http?.statusCode ?? error.http?.http?.statusCode
 }
 
+export function retryAfterMs(error, now = Date.now()) {
+  if (Number.isFinite(error.retryAfterMs)) return Math.max(0, error.retryAfterMs)
+  const headers = error.headers ?? error.response?.headers ?? error.http?.headers ?? error.http?.http?.headers
+  const value = headers?.get?.('retry-after') ?? headers?.['retry-after'] ?? headers?.['Retry-After']
+  if (value === undefined || value === null || String(value).trim() === '') return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : undefined
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(0, date - now) : undefined
+}
+
 export function errorMessage(error) {
   const status = statusCode(error)
   if (status === 401) return 'Heroku authentication expired. Run heroku login and reopen dash.'
@@ -147,7 +158,7 @@ export class HerokuAPI {
   }
 
   async appData(app, options = {}) {
-    const {onUpdate, ...requestOptions} = options
+    const {onUpdate, previous, sections: requested, ...requestOptions} = options
     const base = `/apps/${encode(app)}`
     const sections = {
       app: () => this.get(base, requestOptions),
@@ -161,21 +172,34 @@ export class HerokuAPI {
       // Only the latest page: release histories can be enormous.
       releases: () => this.get(`${base}/releases`, {...requestOptions, headers: {...requestOptions.headers, Range: 'version ..; order=desc,max=20;'}}),
     }
-    const pending = new Set(Object.keys(sections))
-    const data = {errors: {}, fetchedAt: new Date().toISOString(),
-      ...Object.fromEntries([...pending].map(key => [key, ['app', 'coupling'].includes(key) ? null : []]))}
-    await Promise.all(Object.entries(sections).map(async ([key, load]) => {
-      try { data[key] = await load() }
+    const selected = requested ?? Object.keys(sections)
+    if (!Array.isArray(selected) || selected.some(key => !Object.hasOwn(sections, key))) throw new Error('Choose known app data sections.')
+    if (requested && !previous?.app) throw new Error('Selective app reads require a previous snapshot.')
+    const pending = new Set(selected)
+    const data = {
+      ...Object.fromEntries(Object.keys(sections).map(key => [key, ['app', 'coupling'].includes(key) ? null : []])),
+      ...previous, errors: {...previous?.errors}, failures: {...previous?.failures},
+      sectionFetchedAt: {...previous?.sectionFetchedAt}, fetchedAt: new Date().toISOString(),
+    }
+    await Promise.all([...pending].map(async key => {
+      try {
+        data[key] = await sections[key]()
+        delete data.errors[key]
+        delete data.failures[key]
+        data.sectionFetchedAt[key] = Date.now()
+      }
       catch (error) {
         options.signal?.throwIfAborted()
-        data.errors[key] = errorMessage(error); data[key] = ['app', 'coupling'].includes(key) ? null : []
+        data.errors[key] = `${errorMessage(error)}${previous && key !== 'app' ? ' · Showing previous data for this section.' : ''}`
+        data.failures[key] = {statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}
+        if (!previous || key === 'app') data[key] = ['app', 'coupling'].includes(key) ? null : []
       }
       options.signal?.throwIfAborted()
       pending.delete(key)
-      onUpdate?.({...data, errors: {...data.errors}, pending: [...pending]}, key)
+      onUpdate?.({...data, errors: {...data.errors}, failures: {...data.failures}, sectionFetchedAt: {...data.sectionFetchedAt}, pending: [...pending]}, key)
     }))
     options.signal?.throwIfAborted()
-    if (!data.app) throw new Error(data.errors.app)
+    if (!data.app) throw Object.assign(new Error(data.errors.app), data.failures.app)
     return data
   }
 
