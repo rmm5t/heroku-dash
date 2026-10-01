@@ -66,6 +66,92 @@ test('keyboard opens pipeline apps and switches all app views', async t => {
   assert.equal(d.tab, 6)
 })
 
+test('partial pipeline loads show unavailable rows while accessible apps still open and retries recover', async t => {
+  const demo = createDemo()
+  const apps = await demo.api.pipelineApps()
+  let fail = true
+  demo.api.client.request = async path => {
+    if (path.endsWith('pipeline-couplings')) return {body: apps.map(app => ({app: {id: app.id, name: app.name}, stage: app.stage}))}
+    const app = apps.find(app => path.endsWith(`/${app.id}`))
+    assert.ok(app)
+    if (fail && app.stage === 'production') throw Object.assign(new Error('Forbidden'), {statusCode: 403})
+    return {body: app}
+  }
+  // Exercise the real loader rather than the demo's all-success override.
+  delete demo.api.pipelineApps
+  const {dashboard: d, key} = await harness(t, demo)
+  assert.equal(d.rows.length, 2)
+  assert.equal(d.rows[0].kind, 'app')
+  assert.equal(d.rows[1].kind, 'unavailable-app')
+  assert.equal(d.rows[1].value.id, apps[1].id)
+  assert.match(d.rows[1].label, /Unavailable/)
+  assert.match(d.rows[1].detail, /permission/)
+  assert.match(clean(d.summary.content), /production: 1/)
+  assert.match(d.message, /1 app unavailable/)
+  assert.equal(d.messageTone, 'warning')
+  d.main.select(1)
+  await key('\r')
+  await key('P')
+  assert.equal(d.app, null)
+  assert.equal(d.modal, undefined)
+  d.main.select(0)
+  await key('\r')
+  assert.equal(d.app.id, apps[0].id)
+  await d.back()
+  fail = false
+  await d.reload()
+  assert.ok(d.rows.every(row => row.kind === 'app'))
+  assert.equal(d.messageTone, 'success')
+  assert.ok(!d.message.includes('unavailable'))
+  d.main.select(1)
+  await key('\r')
+  assert.equal(d.app.id, apps[1].id)
+})
+
+test('pipeline app failures remain visible even when no app details can be loaded', async t => {
+  const demo = createDemo()
+  const apps = await demo.api.pipelineApps()
+  demo.api.pipelineApps = async () => apps.map(app => ({id: app.id, name: app.name, stage: app.stage, loadError: 'Timed out'}))
+  const {dashboard: d} = await harness(t, demo)
+  assert.equal(d.rows.length, apps.length)
+  assert.ok(d.rows.every(row => row.kind === 'unavailable-app' && /Timed out/.test(row.detail)))
+  assert.match(d.message, /2 apps unavailable/)
+  assert.equal(d.messageTone, 'warning')
+})
+
+test('promotion does not proceed with unavailable pipeline app details', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  const apps = await demo.api.pipelineApps()
+  d.api.pipelineApps = async () => [apps[0], {...apps[1], loadError: 'Forbidden'}]
+  d.api.promotePipelineApp = async () => assert.fail('Incomplete pipeline lookup must not promote')
+  await key('P')
+  assert.match(d.message, /apps are unavailable/)
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+})
+
+test('config cloning source choices exclude unavailable pipeline apps', async t => {
+  const demo = createDemo()
+  demo.api.readOnly = false
+  demo.api.config = async () => ({})
+  const apps = await demo.api.pipelineApps()
+  demo.api.pipelineApps = async () => [...apps, {id: 'unavailable', name: 'unavailable-app', stage: 'production', loadError: 'Forbidden'}]
+  demo.api.prepareConfigClone = async () => assert.fail('Canceled source selection must not prepare a clone')
+  const {dashboard: d, key} = await harness(t, {...demo, demo: false})
+  await key('\r')
+  await key('4')
+  await key('Y')
+  assert.deepEqual(d.modal.children.find(child => child.type === 'list').items.map(item => item.content), ['constellation-production · production'])
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  d.api.pipelineApps = async () => [d.app, {...apps[1], loadError: 'Forbidden'}]
+  await key('Y')
+  assert.match(d.message, /apps are unavailable/)
+  assert.equal(d.modal, null)
+})
+
 test('o in Add-ons opens the selected datastore, third-party SSO, or shared attachment dashboard', async t => {
   const demo = createDemo()
   const original = demo.api.appData.bind(demo.api)

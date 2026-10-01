@@ -34,6 +34,7 @@ for (const directory of directories) {
   assert.ok(context.pipeline, `Repository ${project.name} resolves to a pipeline`)
   const apps = await api.pipelineApps(context.pipeline.id)
   assert.ok(apps.length, 'Pipeline contains apps')
+  assert.ok(apps.every(app => !app.loadError), 'All pipeline app details should load')
   console.log(`${project.name}: pipeline ${context.pipeline.name}, ${apps.length} apps (${context.reason})`)
   for (const app of apps) {
     const data = await api.appData(app.id)

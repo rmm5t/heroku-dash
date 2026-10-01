@@ -106,6 +106,8 @@ The left sidebar browses teams, pipelines, or apps. Choosing a team scopes its p
 
 The pipeline apps pane uses aligned **Stage**, **App**, **Region**, and **Stack** columns with fixed headers. App names receive the available space; narrow layouts hide Stack. Full app names and stack values remain available in Details.
 
+Pipeline app lookups run at most four at a time. Individual lookup failures appear as **Unavailable** rows with error details, while accessible apps remain usable. Press **R** to retry. Promotion requires all pipeline app details to load; unavailable apps are excluded from config-cloning source choices.
+
 Switching apps keeps the selected tab, so moving from Metrics on one app opens Metrics on the next. The destination app's data loads automatically, including config vars and optional cost/limit details when those tabs are selected.
 
 Single-click a tab's number, icon, or label to switch views and focus the resource list. This also works with compact tabs in narrow terminals. Clicking the active tab keeps the current selection and revealed config values.

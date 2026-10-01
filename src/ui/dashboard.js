@@ -510,15 +510,21 @@ export class Dashboard {
       if (appsResult.error) throw appsResult.error
       const apps = sortApps(appsResult.apps)
       this.pipelineApps = apps
+      const unavailable = apps.filter(app => app.loadError).length
       this.summary.setContent(`${badge('pipelines', pipeline.name)}\n\n${STAGES.map(stage => badge(stageStyles[stage].icon, `${stage}: ${apps.filter(a => a.stage === stage).length}`, stageStyles[stage].tone)).join('   ')}`)
-      this.setRows(apps.length ? apps.map(app => ({kind: 'app', value: app, ...stageStyles[app.stage], emphasis: app.stage.toUpperCase(),
+      this.setRows(apps.length ? apps.map(app => app.loadError ? {
+        kind: 'unavailable-app', value: app, icon: 'warning', tone: 'warning', emphasis: app.stage.toUpperCase(),
+        label: `${app.stage.toUpperCase().padEnd(13)} ${single(app.name)} · Unavailable`,
+        columns: [app.stage.toUpperCase(), app.name, 'Unavailable', '—'], columnLayout: 'Pipeline apps',
+        detail: `Unable to load app details\n\n${single(app.name)}\nID: ${single(app.id)}\nStage: ${single(app.stage)}\n\n${clean(app.loadError)}\n\nPress R to retry loading the pipeline.`,
+      } : ({kind: 'app', value: app, ...stageStyles[app.stage], emphasis: app.stage.toUpperCase(),
         label: `${app.stage.toUpperCase().padEnd(13)} ${single(app.name)}  ·  ${app.region?.name ?? '—'}`,
         columns: [app.stage.toUpperCase(), app.name, app.region?.name, app.stack?.name], columnLayout: 'Pipeline apps',
         detail: `${single(app.name)}\n\nStage: ${app.stage}\nTeam: ${single(app.team?.name ?? 'Personal / shared')}\nRegion: ${single(app.region?.name)}\nStack: ${single(app.stack?.name)}\n\nEnter to view resources, add-ons, config, settings, releases, and metrics.\nP to promote the latest release to a higher stage.`,
       })) : [{icon: 'apps', tone: 'muted', label: 'This pipeline has no apps', detail: 'Press A to create an app in this pipeline, or a to browse accessible apps.'}])
       this.main.focus()
-      this.message = `Pipeline loaded. Select an app and press Enter, or press A to add an app.${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
-      this.messageTone = hierarchy.errors.hierarchy ? 'warning' : 'success'
+      this.message = `Pipeline loaded. Select an app and press Enter, or press A to add an app.${unavailable ? ` · ${unavailable} app${unavailable === 1 ? '' : 's'} unavailable; select their rows for details.` : ''}${hierarchy.errors.hierarchy ? ` · ${hierarchy.errors.hierarchy}` : ''}`
+      this.messageTone = unavailable || hierarchy.errors.hierarchy ? 'warning' : 'success'
     } catch (error) {
       if (generation === this.generation) {
         this.setRows([{icon: 'error', tone: 'error', label: 'Unable to load pipeline', detail: errorMessage(error)}])
@@ -994,7 +1000,10 @@ export class Dashboard {
     this.busy = true
     const finishLoading = this.beginLoading('promotion-options', 'Loading promotion destinations…')
     let apps
-    try { apps = await this.api.pipelineApps(pipeline.id) }
+    try {
+      apps = await this.api.pipelineApps(pipeline.id)
+      if (apps.some(app => app.loadError)) throw new Error('Some pipeline apps are unavailable. Refresh the pipeline before promoting.')
+    }
     catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
     finally { loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
     if (!current()) return
@@ -1223,8 +1232,13 @@ export class Dashboard {
     try { apps = await load('Loading source apps…', () => this.api.pipelineApps(pipeline.id)) }
     catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
     if (!current()) return
-    const sources = apps.filter(app => app.id !== destination.id)
-    if (!sources.length) { this.setStatus('There are no other apps in this pipeline to clone config vars from.', 'warning'); return }
+    const sources = apps.filter(app => app.id !== destination.id && !app.loadError)
+    if (!sources.length) {
+      this.setStatus(apps.some(app => app.id !== destination.id && app.loadError)
+        ? 'Other pipeline apps are unavailable. Refresh the pipeline before cloning config vars.'
+        : 'There are no other apps in this pipeline to clone config vars from.', 'warning')
+      return
+    }
     const source = await this.choose(`Clone Config · ${destination.name}`, `Pipeline: ${pipeline.name}\nChoose the app to clone config vars from into the current app.`,
       sources.map(app => ({label: `${app.name} · ${app.stage}`, value: app})))
     if (source === null || !current()) return

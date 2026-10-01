@@ -19,6 +19,78 @@ test('list rejects a repeated pagination cursor', async () => {
   await assert.rejects(api.list('/apps'), /Repeated pagination/)
 })
 
+test('pipeline apps retain accessible members and mark individual lookup failures', async () => {
+  const couplings = [
+    {app: {id: 'accessible'}, stage: 'staging'},
+    {app: {id: 'missing', name: 'removed-app'}, stage: 'production'},
+    {app: {id: 'private'}, stage: 'production'},
+  ]
+  const api = new HerokuAPI({async request(path) {
+    if (path.endsWith('pipeline-couplings')) return {body: couplings}
+    if (path.endsWith('/missing')) throw Object.assign(new Error('App not found.'), {statusCode: 404})
+    if (path.endsWith('/private')) throw Object.assign(new Error('Forbidden'), {statusCode: 403})
+    return {body: {id: 'accessible', name: 'accessible-app', region: {name: 'us'}}}
+  }})
+  const apps = await api.pipelineApps('pipeline')
+  assert.deepEqual(apps[0], {id: 'accessible', name: 'accessible-app', region: {name: 'us'}, stage: 'staging'})
+  assert.deepEqual(apps[1], {id: 'missing', name: 'removed-app', stage: 'production', loadError: 'App not found.'})
+  assert.equal(apps[2].id, 'private')
+  assert.equal(apps[2].name, 'private')
+  assert.equal(apps[2].stage, 'production')
+  assert.match(apps[2].loadError, /permission/)
+  api.client.request = async path => {
+    if (path.endsWith('pipeline-couplings')) return {body: couplings}
+    throw new Error('Timed out')
+  }
+  const failed = await api.pipelineApps('pipeline')
+  assert.deepEqual(failed.map(app => app.id), couplings.map(coupling => coupling.app.id))
+  assert.ok(failed.every(app => app.loadError === 'Timed out'))
+  api.client.request = async path => {
+    if (path.endsWith('pipeline-couplings')) return {body: couplings}
+    throw new Error()
+  }
+  assert.ok((await api.pipelineApps('pipeline')).every(app => app.loadError === 'Unable to load app details.'))
+})
+
+test('pipeline app lookups bound concurrency and preserve coupling order despite out-of-order responses', async () => {
+  const couplings = Array.from({length: 9}, (_, index) => ({app: {id: `app-${index}`}, stage: 'staging'}))
+  const gates = couplings.map(() => Promise.withResolvers())
+  const started = []
+  let active = 0
+  let peak = 0
+  const api = new HerokuAPI({async request(path) {
+    if (path.endsWith('pipeline-couplings')) return {body: couplings}
+    const index = Number(path.split('-').at(-1))
+    started.push(index)
+    active++
+    peak = Math.max(peak, active)
+    await gates[index].promise
+    active--
+    return {body: {id: `app-${index}`, name: `app-${index}`}}
+  }})
+  const loading = api.pipelineApps('pipeline')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(started, [0, 1, 2, 3])
+  gates[3].resolve()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(started, [0, 1, 2, 3, 4])
+  for (const gate of gates) gate.resolve()
+  const apps = await loading
+  assert.equal(peak, 4)
+  assert.equal(active, 0)
+  assert.deepEqual(apps.map(app => app.id), couplings.map(coupling => coupling.app.id))
+})
+
+test('empty pipelines need no app lookups and coupling-list failures still reject', async () => {
+  const api = new HerokuAPI({async request(path) {
+    assert.ok(path.endsWith('pipeline-couplings'))
+    return {body: []}
+  }})
+  assert.deepEqual(await api.pipelineApps('empty'), [])
+  api.client.request = async () => { throw new Error('Couplings unavailable') }
+  await assert.rejects(api.pipelineApps('pipeline'), /Couplings unavailable/)
+})
+
 test('add-on dashboards use authoritative datastore and third-party SSO links, preferring the current attachment', async () => {
   const api = new HerokuAPI({request() { assert.fail('Cached dashboard URLs should not make requests') }}, {readOnly: true})
   const datastore = 'https://data.heroku.com/datastores/database-id'

@@ -107,10 +107,22 @@ export class HerokuAPI {
 
   async pipelineApps(pipeline) {
     const couplings = await this.list(`/pipelines/${encode(pipeline)}/pipeline-couplings`)
-    return Promise.all(couplings.map(async coupling => ({
-      ...await this.get(`/apps/${encode(coupling.app.id)}`),
-      stage: coupling.stage,
-    })))
+    const apps = new Array(couplings.length)
+    let next = 0
+    await Promise.all(Array.from({length: Math.min(4, couplings.length)}, async () => {
+      while (next < couplings.length) {
+        const index = next++
+        const coupling = couplings[index]
+        try {
+          apps[index] = {...await this.get(`/apps/${encode(coupling.app.id)}`), stage: coupling.stage}
+        } catch (error) {
+          // Retain failed members so views and actions can account for every app.
+          apps[index] = {...coupling.app, name: coupling.app.name ?? coupling.app.id,
+            stage: coupling.stage, loadError: errorMessage(error) || 'Unable to load app details.'}
+        }
+      }
+    }))
+    return apps
   }
 
   async appData(app) {
