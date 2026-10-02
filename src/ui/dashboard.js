@@ -202,6 +202,7 @@ export class Dashboard {
       }
     })
     key(['s'], () => void this.scale())
+    key(['S', 'S-s'], () => void this.changeStack())
     key(['x'], () => {
       if (TABS[this.tab] === 'Config') void this.deleteConfig()
       else if (TABS[this.tab] === 'Settings') void this.removeDomain()
@@ -1327,6 +1328,36 @@ export class Dashboard {
     if (confirmation) await this.mutate(() => this.api.maintenance(app.name, enabled, confirmation))
   }
 
+  async changeStack() {
+    if (TABS[this.tab] !== 'Settings' || !this.writable()) return
+    if (this.demo) { this.setStatus('Stack changes are disabled in the offline demo.', 'warning'); return }
+    const app = this.app
+    const generation = this.generation
+    const buildStack = app.build_stack?.name ?? app.stack?.name
+    const current = () => !this.closed && generation === this.generation && this.app?.id === app.id
+    let result
+    try {
+      result = await this.prepareRead('stack-options', 'Loading available stacks…', async options => {
+        const stacks = await this.api.appStacks(app.id, options)
+        if (!stacks.length) throw new Error('No stacks are available for this app.')
+        return stacks
+      }, current)
+    } catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    if (!result || !current()) return
+    const stacks = result.value
+    const stack = await this.choose('Change stack', `${app.name}\nRunning stack: ${app.stack?.name ?? '—'} · Build stack: ${buildStack ?? '—'}\nChoose the stack for the next deploy.`,
+      stacks.map(item => ({label: `${item.name}${item.name === buildStack ? ' (current build stack)' : ''}${item.state && item.state !== 'public' ? ` · ${item.state}` : ''}`, value: item.name})),
+      stacks.findIndex(item => item.name === buildStack))
+    if (stack === null || !current()) return
+    if (stack === buildStack) { this.setStatus(`${stack} is already the build stack.`); return }
+    const confirmation = await this.confirm(app, `Change build stack: ${buildStack ?? '—'} → ${stack}\nThe new stack takes effect on the next deploy.\nDeploy the app again to rebuild it on the selected stack.`, {highlightFirstLine: true})
+    if (!confirmation || !current()) return
+    await this.mutate(() => this.api.setStack(app.name, stack, confirmation), {
+      successMessage: `Build stack set to ${stack}. Deploy the app to apply it.`,
+      selectRow: row => row.id === 'settings:stack',
+    })
+  }
+
   async addDomain() {
     if (TABS[this.tab] !== 'Settings' || !this.writable()) return
     if (this.demo) { this.setStatus('Domain creation is disabled in the offline demo.', 'warning'); return }
@@ -1512,7 +1543,7 @@ export class Dashboard {
   help() {
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
       content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nAll text inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
-    modal.setContent(highlightKeys(`${modal.content}\n\nLOG VIEWER\n  L               Tail logs for the current app (also in read-only mode)\n  p / Space       Pause / resume display; scrolling up also pauses\n  /               Filter buffered lines (text or regex; case-insensitive)\n  ↑/↓, Ctrl-P/N   Browse pipeline filter history in the filter input\n  End             Resume following the latest logs\n  Esc / q         Close viewer and stop streaming`))
+    modal.setContent(highlightKeys(`${modal.content}\n\nSTACK CHANGES (SETTINGS)\n  S / Shift-S     Choose the build stack for the next deploy\n\nLOG VIEWER\n  L               Tail logs for the current app (also in read-only mode)\n  p / Space       Pause / resume display; scrolling up also pauses\n  /               Filter buffered lines (text or regex; case-insensitive)\n  ↑/↓, Ctrl-P/N   Browse pipeline filter history in the filter input\n  End             Resume following the latest logs\n  Esc / q         Close viewer and stop streaming`))
     const lifecycle = new ModalLifecycle(this, modal)
     bindMovementKeys(modal)
     modal.key(['escape', '?', 'q'], () => lifecycle.close())

@@ -429,6 +429,7 @@ test('read-only mode rejects every write before transport', async () => {
   await assert.rejects(api.restart('app', 'web.1', 'dyno', 'app'), /Read-only/)
   await assert.rejects(api.setConfig('app', 'KEY', 'value', 'app'), /Read-only/)
   await assert.rejects(api.maintenance('app', true, 'app'), /Read-only/)
+  await assert.rejects(api.setStack('app', 'heroku-24', 'app'), /Read-only/)
   await assert.rejects(api.createPipelineApp({name: 'new-app'}, 'new-app'), /Read-only/)
   await assert.rejects(api.promotePipelineApp({source: {name: 'source-app'}}, 'source-app'), /Read-only/)
   await assert.rejects(api.addDomain('app', 'www.example.com', true, 'app'), /Read-only/)
@@ -451,6 +452,8 @@ test('mutations validate confirmation, quantity, size, and config names', async 
   await assert.rejects(api.dynoAction('app', 'web', 'process', 'delete', 'app'), /must be stop or restart/)
   await assert.rejects(api.setConfig('app', 'BAD-NAME', '', 'app'), /Config keys/)
   await assert.rejects(api.maintenance('app', 'true', 'app'), /boolean/)
+  await assert.rejects(api.setStack('production', 'heroku-24', 'staging'), /exact app name/)
+  for (const stack of ['', ' \t ', null, undefined, 24]) await assert.rejects(api.setStack('app', stack, 'app'), /Heroku stack/)
 })
 
 test('confirmed mutations target exactly the app and process requested', async () => {
@@ -464,6 +467,7 @@ test('confirmed mutations target exactly the app and process requested', async (
   await api.setConfig('staging', 'EMPTY', '', 'staging')
   await api.setConfig('staging', 'DELETE', null, 'staging')
   await api.maintenance('staging', true, 'staging')
+  await api.setStack('staging', ' heroku-24 ', 'staging')
   assert.deepEqual(calls.map(c => [c.method, c.path, c.body]), [
     ['PATCH', '/apps/staging/formation/web', {quantity: 0, size: 'Standard-1X'}],
     ['POST', '/apps/staging/formations/web/actions/stop', undefined],
@@ -473,7 +477,27 @@ test('confirmed mutations target exactly the app and process requested', async (
     ['PATCH', '/apps/staging/config-vars', {EMPTY: ''}],
     ['PATCH', '/apps/staging/config-vars', {DELETE: null}],
     ['PATCH', '/apps/staging', {maintenance: true}],
+    ['PATCH', '/apps/staging', {build_stack: 'heroku-24'}],
   ])
+})
+
+test('stack choices use the app-specific catalog, follow pagination, and retain availability states', async () => {
+  const controller = new AbortController()
+  const ranges = []
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(path, '/apps/app%2Fid/available-stacks')
+    assert.equal(options.method, 'GET')
+    assert.equal(options.signal, controller.signal)
+    ranges.push(options.headers.Range)
+    return ranges.length === 1
+      ? {body: [{name: 'heroku-24', state: 'public'}, {name: 'heroku-9', state: 'deprecated'}], headers: {'Next-Range': 'name heroku-24..'}}
+      : {body: [{name: 'heroku-26', state: 'beta'}, {name: 'cnb', state: 'public'}]}
+  }}, {readOnly: true})
+  assert.deepEqual(await api.appStacks('app/id', {signal: controller.signal}), [
+    {name: 'cnb', state: 'public'}, {name: 'heroku-9', state: 'deprecated'},
+    {name: 'heroku-24', state: 'public'}, {name: 'heroku-26', state: 'beta'},
+  ])
+  assert.deepEqual(ranges, [undefined, 'name heroku-24..'])
 })
 
 test('dyno sizes use the full catalog, paginate, and order by memory and size name', async () => {

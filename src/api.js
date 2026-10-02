@@ -255,6 +255,11 @@ export class HerokuAPI {
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
+  async appStacks(app, options) {
+    return (await this.list(`/apps/${encode(app)}/available-stacks`, options))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}))
+  }
+
   async appDynoSizes(app, options) {
     // The app-specific catalog is restricted by the current formation's tier.
     // Use the full catalog so scaling can move between Basic and larger sizes.
@@ -328,6 +333,12 @@ export class HerokuAPI {
     validateDynoQuantity(quantity)
     validateDynoSize(size)
     return this.get(`/apps/${encode(app)}/formation/${encode(type)}`, {method: 'PATCH', body: {quantity, size: size.trim()}})
+  }
+
+  async setStack(app, stack, confirmation) {
+    this.confirm(app, confirmation)
+    if (typeof stack !== 'string' || !stack.trim()) throw new Error('Select a Heroku stack.')
+    return this.get(`/apps/${encode(app)}`, {method: 'PATCH', body: {build_stack: stack.trim()}})
   }
 
   async dynoAction(app, target, scope, action, confirmation) {

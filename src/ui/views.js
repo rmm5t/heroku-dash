@@ -162,13 +162,17 @@ function configRows(_data, {config, configError, revealed}) {
 
 function settingsRows(data) {
   const {app, domains, buildpacks, errors} = data
+  const stack = app.stack?.name ?? '—'
+  const buildStack = app.build_stack?.name ?? stack
+  const stackLabel = stack === buildStack ? stack : `${stack} → ${buildStack} (next deploy)`
   const rows = []
   rows.push(row(`Maintenance mode: ${app.maintenance ? 'ON' : 'OFF'}    [m] toggle`, 'Press m to toggle maintenance mode. This changes how the app serves requests.', {icon: 'settings', tone: app.maintenance ? 'warning' : 'success', emphasis: app.maintenance ? 'ON' : 'OFF',
     columns: ['Maintenance', app.maintenance ? 'ON' : 'OFF', '[m] toggle']}))
-  rows.push(row(`Region: ${app.region?.name}  ·  Stack: ${app.stack?.name}`, lines([
-    ['Region', app.region?.name], ['Stack', app.stack?.name], ['Build stack', app.build_stack?.name],
+  rows.push(row(`Region: ${app.region?.name}  ·  Stack: ${stackLabel}    [S] change stack`, lines([
+    ['Region', app.region?.name], ['Stack', stack], ['Build stack', buildStack],
     ['Space', app.space?.name ?? 'Common Runtime'], ['ACM', app.acm ? 'Enabled' : 'Disabled'],
-  ]), {icon: 'globe', tone: 'info', columns: ['Region / stack', `${app.region?.name ?? '—'} / ${app.stack?.name ?? '—'}`, '—']}))
+  ]) + '\n\n[S] change the build stack for the next deploy.\nDeploy the app again to apply the selected stack.',
+  {id: 'settings:stack', icon: 'globe', tone: 'info', columns: ['Region / stack', `${app.region?.name ?? '—'} / ${stackLabel}`, '[S] change stack']}))
   rows.push(row('Add domain    [D] new', 'Press D to add a custom domain and optionally enable Automatic Certificate Management (ACM).\nACM is enabled for the entire app.\nConfigure DNS to point to the domain’s CNAME after adding it.',
     {id: 'action:add-domain', icon: 'globe', tone: 'cyan', columns: ['Add domain', 'Custom hostname / optional ACM', '[D] new']}))
   rows.push(...errorRows('Settings', errors, ['domains', 'buildpacks']))

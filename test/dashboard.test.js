@@ -2049,6 +2049,140 @@ test('wrapped and scrolled domain fields copy the complete value after resizing'
   assert.equal(copies.length, 2)
 })
 
+test('Shift-S selects an available build stack in Settings and requires exact-app confirmation', async t => {
+  const {dashboard: d, key} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  const original = d.api.appData.bind(d.api)
+  const writes = []
+  d.api.appData = async id => {
+    const data = await original(id)
+    return {...data, app: {...data.app, build_stack: {name: writes.length ? 'heroku-26' : 'heroku-24'}}}
+  }
+  d.api.appStacks = async (id, {signal}) => {
+    assert.equal(id, 'app-staging')
+    assert.equal(signal.aborted, false)
+    return [{name: 'heroku-22', state: 'deprecated'}, {name: 'heroku-24', state: 'public'}, {name: 'heroku-26', state: 'beta'}]
+  }
+  d.api.setStack = async (...args) => { writes.push(args) }
+  await key('\r')
+  await key('5')
+  assert.match(d.rows.find(row => row.id === 'settings:stack').detail, /\[S\] change/)
+  await key('S')
+  const list = d.modal.children.find(child => child.type === 'list')
+  assert.deepEqual(list.items.map(item => clean(item.content)), ['heroku-22 · deprecated', 'heroku-24 (current build stack)', 'heroku-26 · beta'])
+  assert.equal(list.selected, 1)
+  await key('\x0e')
+  await key('\r')
+  assert.match(d.modal._label.content, /Confirm remote change/)
+  assert.match(clean(d.modal.children.map(child => child.content).join('\n')), /heroku-24 → heroku-26/)
+  assert.match(clean(d.modal.children.map(child => child.content).join('\n')), /next deploy/)
+  assert.equal(writes.length, 0)
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes, [['constellation-staging', 'heroku-26', 'constellation-staging']])
+  assert.equal(d.app.stack.name, 'heroku-24')
+  assert.equal(d.app.build_stack.name, 'heroku-26')
+  assert.equal(d.rows[d.main.selected].id, 'settings:stack')
+  assert.match(d.rows[d.main.selected].columns[1], /heroku-24 → heroku-26 \(next deploy\)/)
+  assert.match(d.message, /Build stack set to heroku-26\. Deploy the app to apply it/)
+  assert.equal(d.modal, null)
+  await key('?')
+  assert.match(clean(d.modal.content), /S \/ Shift-S\s+Choose the build stack/)
+})
+
+test('stack changes respect view and mode restrictions, cancellation, unchanged selections, and confirmation', async t => {
+  const {dashboard: d, key} = await harness(t)
+  let reads = 0
+  d.api.appStacks = async () => {
+    reads++
+    return [{name: 'heroku-24', state: 'public'}, {name: 'heroku-26', state: 'public'}]
+  }
+  d.api.setStack = () => assert.fail('An unconfirmed stack change must not write')
+  await key('S')
+  await key('\r')
+  await key('S') // Overview is not a stack-change view.
+  assert.equal(reads, 0)
+  await key('5')
+  await key('S')
+  assert.match(d.message, /Read-only/)
+  assert.equal(reads, 0)
+  d.api.readOnly = false
+  d.demo = true
+  await key('S')
+  assert.match(d.message, /offline demo/)
+  assert.equal(reads, 0)
+  d.demo = false
+  await key('S')
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  d.screen.emit('key S-s') // Blessed's alternate shifted key name.
+  await delay(0)
+  assert.match(d.modal._label.content, /Change stack/)
+  await key('\r')
+  assert.equal(d.modal, null)
+  assert.match(d.message, /already the build stack/)
+  for (const confirmation of ['\x1b', 'wrong-app\r']) {
+    await key('S')
+    await key('\x0e')
+    await key('\r')
+    await key(confirmation)
+    assert.equal(d.modal, null)
+  }
+  assert.match(d.message, /did not match/)
+})
+
+test('stack catalog and update failures release dialogs and preserve the app stack', async t => {
+  const {dashboard: d, key} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  await key('\r')
+  await key('5')
+  d.api.setStack = () => assert.fail('No stack choice must not write')
+  d.api.appStacks = async () => []
+  await key('S')
+  assert.match(d.message, /No stacks are available/)
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+  d.api.appStacks = async () => { throw new Error('Stacks unavailable') }
+  await key('S')
+  assert.match(d.message, /Stacks unavailable/)
+  assert.equal(d.modal, null)
+  assert.equal(d.loading.size, 0)
+  d.api.appStacks = async () => [{name: 'heroku-26', state: 'public'}]
+  d.api.setStack = async () => { throw new Error('Stack change denied') }
+  d.confirm = async app => app.name
+  await key('S')
+  await key('\r')
+  assert.match(d.message, /Stack change denied/)
+  assert.equal(d.app.stack.name, 'heroku-24')
+  assert.equal(d.app.build_stack.name, 'heroku-24')
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+  assert.equal(d.loading.size, 0)
+})
+
+test('canceling stack catalog loading aborts the read and ignores late results', async t => {
+  const {dashboard: d, key} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  await key('\r')
+  await key('5')
+  const pending = Promise.withResolvers()
+  let signal
+  d.api.appStacks = (_id, options) => { signal = options.signal; return pending.promise }
+  d.api.setStack = () => assert.fail('Canceled catalog loading must not write')
+  const changing = d.changeStack()
+  d.modal.destroy()
+  assert.equal(signal.aborted, true)
+  assert.equal(d.busy, false)
+  const next = d.prompt('Next prompt', 'A newer dialog stays open.')
+  const replacement = d.modal
+  pending.resolve([{name: 'heroku-26', state: 'public'}])
+  await changing
+  assert.equal(d.modal, replacement)
+  assert.equal(d.loading.size, 0)
+  d.modalLifecycle.close()
+  assert.equal(await next, null)
+})
+
 for (const enableACM of [false, true]) test(`Settings adds a domain ${enableACM ? 'with' : 'without'} ACM after confirmation`, async t => {
   const demo = createDemo()
   demo.api.readOnly = false

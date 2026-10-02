@@ -140,7 +140,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **2 Resources** | Inspect process commands, desired quantity, and dyno size names; inspect individual dyno sizes with RAM and vCPU specifications, states, and ages; scale or stop processes and restart processes or dynos; optionally view costs and total CPU/RAM allocations |
 | **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments; optionally view billed costs and capacity limits |
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
-| **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |
+| **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; change the build stack for the next deploy; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, fetched in one API page, including status, author, description, and timestamp |
 | **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and selectable-timeframe charts, alongside dyno health |
 
@@ -180,6 +180,7 @@ App actions:
 | `n` | Config | Create a variable (or explicitly replace an existing key) |
 | `x` | Config | Delete the selected variable |
 | `m` | Settings | Toggle maintenance mode |
+| `S` / `Shift-S` | Settings | Choose an available Heroku stack for the next deploy, after exact-app-name confirmation |
 | `T` / `Shift-T` | Metrics | Cycle Past 2 hours (default), Past 24 hours, Past 72 hours, and Past 7 days |
 | `D` | Settings | Add a custom domain and optionally enable SSL with ACM |
 | `y` | Settings | Copy the selected custom domain’s CNAME to the clipboard |

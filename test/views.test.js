@@ -76,6 +76,17 @@ test('Settings domain rows identify copyable Hostname and CNAME values and retai
   assert.ok(!appRows('Settings', data).find(row => row.kind === 'domain').detail.includes('[x]'))
 })
 
+test('Settings exposes stack changes and distinguishes the running stack from a pending build stack', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  data.app.build_stack = {name: 'heroku-26'}
+  const row = appRows('Settings', data).find(row => row.id === 'settings:stack')
+  assert.equal(row.columns[1], 'us / heroku-24 → heroku-26 (next deploy)')
+  assert.equal(row.columns[2], '[S] change stack')
+  assert.match(row.detail, /Stack\s+heroku-24\nBuild stack\s+heroku-26/)
+  assert.match(row.detail, /\[S\] change the build stack for the next deploy/)
+})
+
 test('metrics columns show unavailable dyno counts as unknown rather than zero', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)
