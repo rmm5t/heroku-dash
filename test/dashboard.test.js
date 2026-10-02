@@ -2558,8 +2558,8 @@ test('log highlights use contrasting text in both themes and restore original co
   }
 })
 
-test('log streams and filter editors are cleaned up on app or pipeline navigation and Ctrl-C', async t => {
-  for (const destination of ['app', 'pipeline', 'exit']) {
+test('log streams and filter editors are cleaned up on navigation, widget destruction, and Ctrl-C', async t => {
+  for (const destination of ['app', 'pipeline', 'destroy', 'exit']) {
     const execution = Promise.withResolvers()
     let options
     const {dashboard: d, screen, key} = await harness(t, {demo: false,
@@ -2573,11 +2573,13 @@ test('log streams and filter editors are cleaned up on app or pipeline navigatio
     assert.equal(screen.grabKeys, true)
     if (destination === 'app') await d.openApp(d.catalog.apps.find(app => app.id !== d.app.id))
     else if (destination === 'pipeline') await d.openPipeline(d.catalog.pipelines[0])
+    else if (destination === 'destroy') modal.destroy()
     else await key('\x03')
     await running
     assert.equal(options.signal.aborted, true)
     assert.equal(d.logRequest, null)
     assert.equal(d.modal, null)
+    assert.equal(d.modalLifecycle, null)
     assert.equal(modal.destroyed, true)
     assert.equal(screen.grabKeys, false)
     const message = d.message
@@ -2673,6 +2675,46 @@ test('app-scoped Heroku commands require confirmation and stream sanitized outpu
   await key('q')
   assert.equal(d.modal, null)
   assert.match(d.message, /command completed/i)
+})
+
+test('command modal cleanup cancels streams and suppresses late output after close, destruction, and shutdown', async t => {
+  for (const destination of ['close', 'destroy', 'exit']) {
+    const execution = Promise.withResolvers()
+    let options
+    const {dashboard: d, screen} = await harness(t, {demo: false,
+      executeHeroku: (_args, value) => { options = value; return execution.promise }})
+    await d.openApp(d.catalog.apps[0])
+    const previous = screen.focused
+    const running = d.commandPane(d.app, ['logs', '--app', d.app.name], 'heroku logs')
+    const request = d.commandRequest
+    const modal = d.modal
+    options.onOutput('before closing\n')
+    if (destination === 'close') {
+      assert.equal(request.close(), true)
+      assert.equal(screen.focused, previous)
+    } else if (destination === 'destroy') modal.destroy()
+    else d.close()
+    assert.equal(request.close(), false)
+    assert.equal(options.signal.aborted, true)
+    assert.equal(d.commandRequest, null)
+    assert.equal(d.modal, null)
+    assert.equal(d.modalLifecycle, null)
+    assert.equal(modal.destroyed, true)
+    const message = d.message
+    const next = destination === 'close' ? d.prompt('Next prompt', 'A newer modal stays active.') : null
+    const replacement = d.modal
+    options.onOutput('late output\n')
+    execution.reject(new Error('late failure'))
+    await running
+    assert.equal(d.message, message)
+    assert.equal(d.modal, replacement)
+    if (next) {
+      assert.ok(!replacement.destroyed)
+      d.modalLifecycle.close()
+      assert.equal(await next, null)
+    }
+    assert.equal(d.closed, destination === 'exit')
+  }
 })
 
 test('custom command prompt browses shared history and saves the confirmed command', async t => {
@@ -3113,6 +3155,57 @@ test('config deletion and maintenance toggle target the confirmed app', async t 
     ['config', 'constellation-staging', 'EXAMPLE_SECRET', null, 'constellation-staging'],
     ['maintenance', 'constellation-staging', true, 'constellation-staging'],
   ])
+})
+
+test('destroying progress modals cancels preparation and cannot replace a newer dialog', async t => {
+  for (const action of ['addApp', 'promoteApp']) {
+    const pending = Promise.withResolvers()
+    let signal
+    const {dashboard: d} = await harness(t, {demo: false})
+    d.api.readOnly = false
+    d.api.createPipelineApp = () => assert.fail('Canceled preparation must not create an app')
+    d.api.promotePipelineApp = () => assert.fail('Canceled preparation must not promote an app')
+    if (action === 'addApp') d.api.appRegions = options => { signal = options.signal; return pending.promise }
+    else d.api.pipelineApps = (_id, options) => { signal = options.signal; return pending.promise }
+    const preparing = d[action]()
+    const progress = d.modal
+    progress.destroy()
+    assert.equal(signal.aborted, true)
+    const next = d.prompt('Next prompt', 'A newer modal stays active.')
+    const replacement = d.modal
+    const lifecycle = d.modalLifecycle
+    const message = d.message
+    pending.resolve([])
+    await preparing
+    assert.equal(d.modal, replacement)
+    assert.equal(d.modalLifecycle, lifecycle)
+    assert.ok(!replacement.destroyed)
+    assert.equal(d.message, message)
+    lifecycle.close()
+    assert.equal(await next, null)
+  }
+})
+
+test('prompt, choice, and confirmation promises settle when their widgets are destroyed or Dash closes', {timeout: 3000}, async t => {
+  for (const kind of ['prompt', 'choice', 'confirmation']) {
+    for (const destination of ['destroy', 'exit']) {
+      const {dashboard: d, screen} = await harness(t)
+      const result = kind === 'prompt' ? d.prompt('Secret', 'Enter a value.', 'initial secret', {secret: true})
+        : kind === 'choice' ? d.choose('Choose', 'Select a value.', [{label: 'One', value: 1}])
+          : d.confirmChoice('Confirm', 'Continue?')
+      const modal = d.modal
+      const input = modal.children.find(child => child.type === 'textbox')
+      if (destination === 'destroy') modal.destroy()
+      else d.close()
+      assert.equal(await result, kind === 'confirmation' ? false : null)
+      assert.equal(d.modal, null)
+      assert.equal(d.modalLifecycle, null)
+      assert.equal(screen.grabKeys, false)
+      assert.equal(modal.destroyed, true)
+      assert.equal(d.closed, destination === 'exit')
+      if (input) assert.equal(input.getValue(), '')
+    }
+  }
 })
 
 test('Ctrl-C exits while a textbox has captured terminal input', async t => {

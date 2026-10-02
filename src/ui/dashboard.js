@@ -13,6 +13,7 @@ import {age, ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TA
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {LogBuffer, LOG_LIMITS} from './log-buffer.js'
+import {ModalLifecycle} from './modal-lifecycle.js'
 import {enableReadline} from './readline.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
@@ -72,6 +73,7 @@ export class Dashboard {
     this.copying = false
     this.commandRequest = null
     this.logRequest = null
+    this.modalLifecycle = null
     this.interactiveRequest = null
     this.promotionRequest = null
     this.openingBrowser = false
@@ -844,9 +846,8 @@ export class Dashboard {
   prompt(title, description, initial = '', {secret = false, tone = 'accent', icon = 'keyboard', highlightFirstLine = false, history, confirmationApp} = {}) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
-      const previous = this.screen.focused
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: confirmationApp ? 17 : 14, ...frame(), label: ` ${icons[secret ? 'lock' : icon]}  ${single(title)} `, style: {...frame().style, border: {fg: palette[tone]}}})
-      this.modal = modal
+      const lifecycle = new ModalLifecycle(this, modal, {onClose: ({value}) => resolve(value)})
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false,
         scrollable: true, mouse: true, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
       if (confirmationApp) blessed.box({parent: modal, top: 8, left: 2, right: 2, height: 2, tags: false,
@@ -855,18 +856,11 @@ export class Dashboard {
       const input = blessed.textbox({parent: modal, top: confirmationApp ? 11 : 8, left: 2, right: 2, height: 3, ...frame(), inputOnFocus: true, censor: secret, value: initial})
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}   ${shortcut('Ctrl-U', 'kill left')}${history ? `   ${shortcut('↑/↓', 'history')}` : ''}`, style: {bg: palette.bg}})
       enableReadline(input, history ?? [], () => this.render())
-      let finished = false
-      const finish = value => {
-        if (finished) return
-        finished = true
-        this.cancelPrompt = null
+      lifecycle.addCleanup(() => {
+        input._done?.('stop')
         input.clearValue()
-        modal.destroy()
-        this.modal = null
-        if (!this.closed) { previous?.focus(); this.render() }
-        resolve(value)
-      }
-      this.cancelPrompt = () => finish(null)
+      })
+      const finish = value => lifecycle.close({value})
       input.on('submit', value => finish(value))
       input.on('cancel', () => finish(null))
       input.key(['C-c'], () => this.close())
@@ -891,27 +885,16 @@ export class Dashboard {
   choose(title, description, choices, initial = 0) {
     if (this.closed) return Promise.resolve(null)
     return new Promise(resolve => {
-      const previous = this.screen.focused
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 16, ...frame(),
         label: ` ${icons.apps}  ${single(title)} `})
-      this.modal = modal
+      const lifecycle = new ModalLifecycle(this, modal, {onClose: ({value}) => resolve(value)})
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 3, content: highlightKeys(description), tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const list = blessed.list({parent: modal, top: 5, bottom: 2, left: 2, right: 2, ...frame(), keys: true, mouse: true,
         items: choices.map(choice => single(choice.label)), style: {...frame().style, selected: {fg: palette.bg, bg: palette.accent}}})
       bindMovementKeys(list)
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('↑/↓', 'select')}   ${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}`, style: {bg: palette.bg}})
-      let finished = false
-      const finish = value => {
-        if (finished) return
-        finished = true
-        this.cancelPrompt = null
-        modal.destroy()
-        this.modal = null
-        if (!this.closed) { previous?.focus(); this.render() }
-        resolve(value)
-      }
-      this.cancelPrompt = () => finish(null)
+      const finish = value => lifecycle.close({value})
       list.on('select', (_item, index) => finish(choices[index].value))
       list.key(['escape'], () => finish(null))
       list.select(Math.max(0, initial))
@@ -931,7 +914,8 @@ export class Dashboard {
     const {signal} = request.controller
     const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
       content: `\n  ${badge('refresh', 'Loading Add App options…', 'info')}`})
-    this.modal = loading
+    const loadingLifecycle = new ModalLifecycle(this, loading)
+    loadingLifecycle.addCleanup(() => { if (request.current()) request.controller.abort() })
     this.busy = true
     const finishLoading = this.beginLoading('app-options', 'Loading runtime regions…')
     let regions
@@ -944,7 +928,7 @@ export class Dashboard {
       pipeline = details
       if (!regions.length) throw new Error('No Common Runtime regions are available.')
     } catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error'); return }
-    finally { request.finish(); loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    finally { request.finish(); loadingLifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
     if (!current()) return
     const title = `Add App · ${pipeline.name}`
     const stage = await this.choose(`${title} · Stage`, 'Choose the pipeline stage for the new app.',
@@ -966,7 +950,7 @@ export class Dashboard {
     if (!confirmation || !current()) return
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
       content: `\n  ${badge('refresh', `Creating ${name}…`, 'info')}`})
-    this.modal = modal
+    const lifecycle = new ModalLifecycle(this, modal)
     this.busy = true
     const finishCreation = this.beginLoading('app-create', `Creating ${name} in ${pipeline.name}…`)
     try {
@@ -987,7 +971,7 @@ export class Dashboard {
         if (!this.closed) this.drawNav()
       }
       if (!this.closed) this.setStatus(errorMessage(error), 'error')
-    } finally { modal.destroy(); this.modal = null; this.busy = false; finishCreation(); this.render() }
+    } finally { lifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishCreation(); this.render() }
   }
 
   async promoteApp() {
@@ -1005,7 +989,8 @@ export class Dashboard {
     const {signal} = request.controller
     const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
       content: `\n  ${badge('refresh', 'Loading promotion destinations…', 'info')}`})
-    this.modal = loading
+    const loadingLifecycle = new ModalLifecycle(this, loading)
+    loadingLifecycle.addCleanup(() => { if (request.current()) request.controller.abort() })
     this.busy = true
     const finishLoading = this.beginLoading('promotion-options', 'Loading promotion destinations…')
     let apps
@@ -1014,7 +999,7 @@ export class Dashboard {
       if (apps.some(app => app.loadError)) throw new Error('Some pipeline apps are unavailable. Refresh the pipeline before promoting.')
     }
     catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error'); return }
-    finally { request.finish(); loading.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    finally { request.finish(); loadingLifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
     if (!current()) return
     const source = apps.find(app => app.id === selected.id)
     const sourceIndex = APP_STAGES.indexOf(source?.stage)
@@ -1034,26 +1019,32 @@ export class Dashboard {
       label: ` ${icons.pipelines}  Promoting ${single(source.name)} `, scrollable: true, keys: true, vi: true, mouse: true,
       content: `\n  ${badge('refresh', `Starting promotion to ${stage}…`, 'info')}`, scrollbar: {ch: '│', style: {bg: palette.border}}})
     bindMovementKeys(modal)
-    this.modal = modal
+    const lifecycle = new ModalLifecycle(this, modal)
     modal.focus()
     this.busy = true
     const controller = new AbortController()
-    this.promotionRequest = {controller}
+    const promotionRequest = {controller}
+    this.promotionRequest = promotionRequest
+    let finished = false
+    lifecycle.addCleanup(() => {
+      if (this.promotionRequest === promotionRequest) this.promotionRequest = null
+      if (!finished) controller.abort()
+    })
     const finishPromotion = this.beginLoading('promotion', `Promoting ${source.name} to ${stage}…`)
     let promotion
     for (const target of targets) this.invalidateAppSnapshot(target.id)
     try {
       promotion = await this.api.promotePipelineApp({pipeline, source, stage, targets}, confirmation)
-      if (this.closed) return
+      if (this.closed || lifecycle.closed) return
       const results = await this.api.waitForPromotion(promotion, targets, {signal: controller.signal, onUpdate: results => {
-        if (this.closed) return
+        if (this.closed || lifecycle.closed) return
         modal.setContent(`\n  ${badge('pipelines', `${source.name} → ${stage}`, 'info')}\n\n${targets.map(app => {
           const result = results.find(item => item.app.id === app.id)
           return `  ${badge(result?.status === 'failed' ? 'error' : 'apps', `${app.name}: ${result?.status ?? 'pending'}${result?.error_message ? ` · ${result.error_message}` : ''}`, result?.status === 'failed' ? 'error' : result?.status === 'succeeded' ? 'success' : 'info')}`
         }).join('\n')}`)
         this.render()
       }})
-      if (this.closed) return
+      if (this.closed || lifecycle.closed) return
       this.busy = false
       let refreshed
       if (appContext) refreshed = await this.loadApp()
@@ -1069,24 +1060,22 @@ export class Dashboard {
         : `Promoted ${source.name} to ${stage}: ${targets.map(app => app.name).join(', ')}.${refreshed ? '' : ' Refresh failed; press R to retry.'}`,
       failures.length ? 'error' : refreshed ? 'success' : 'warning')
     } catch (error) {
-      if (!this.closed) this.setStatus(`${promotion ? `Promotion ${promotion.id} started, but status tracking failed. ` : ''}${errorMessage(error)}`, 'error')
+      if (!this.closed && !lifecycle.closed) this.setStatus(`${promotion ? `Promotion ${promotion.id} started, but status tracking failed. ` : ''}${errorMessage(error)}`, 'error')
     } finally {
-      modal.destroy()
-      this.modal = null
+      finished = true
+      lifecycle.close({restoreFocus: false, render: false})
       this.busy = false
-      this.promotionRequest = null
       finishPromotion()
-      if (!this.closed) { this.main.focus(); this.render() }
+      if (!this.closed && !this.modal) { this.main.focus(); this.render() }
     }
   }
 
   confirmChoice(title, description, {highlightFirstLine = false} = {}) {
     if (this.closed) return Promise.resolve(false)
     return new Promise(resolve => {
-      const previous = this.screen.focused
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '75%', height: 13, ...frame(),
         label: ` ${icons.warning}  ${single(title)} `, style: {...frame().style, border: {fg: palette.warning}}})
-      this.modal = modal
+      const lifecycle = new ModalLifecycle(this, modal, {onClose: ({value}) => resolve(value === true)})
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 6, content: descriptionContent(description, highlightFirstLine), tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const button = (content, left, tone) => blessed.box({parent: modal, bottom: 1, left, width: 22, height: 3, ...frame(),
@@ -1095,7 +1084,6 @@ export class Dashboard {
       const proceed = button('Continue (y)', '25%-11', 'success')
       const cancel = button('Cancel (n)', '75%-11', 'muted')
       let selected = true
-      let finished = false
       const select = value => {
         selected = value
         for (const [control, active] of [[proceed, selected], [cancel, !selected]]) {
@@ -1106,16 +1094,7 @@ export class Dashboard {
 
         this.render()
       }
-      const finish = value => {
-        if (finished) return
-        finished = true
-        this.cancelPrompt = null
-        modal.destroy()
-        this.modal = null
-        if (!this.closed) { previous?.focus(); this.render() }
-        resolve(value)
-      }
-      this.cancelPrompt = () => finish(false)
+      const finish = value => lifecycle.close({value})
       modal.on('keypress', (_ch, key) => {
         if (key.name?.toLowerCase() === 'y') finish(true)
         if (key.name?.toLowerCase() === 'n' || key.name === 'escape') finish(false)
@@ -1135,7 +1114,7 @@ export class Dashboard {
     // subsequent refresh must remain the app named in the confirmation.
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
       content: `\n  ${badge('refresh', 'Applying confirmed change…', 'info')}`})
-    this.modal = modal
+    const lifecycle = new ModalLifecycle(this, modal)
     this.busy = true
     this.setStatus('Applying change…')
     const finishLoading = this.beginLoading('mutation', 'Applying confirmed change…')
@@ -1165,7 +1144,7 @@ export class Dashboard {
       }
       if (!this.closed) this.setStatus(errorMessage(error), 'error')
     }
-    finally { modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+    finally { lifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
   }
 
   async scale() {
@@ -1235,11 +1214,12 @@ export class Dashboard {
       const {signal} = request.controller
       const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
         content: `\n  ${badge('refresh', label, 'info')}`})
-      this.modal = modal
+      const lifecycle = new ModalLifecycle(this, modal)
+      lifecycle.addCleanup(() => { if (request.current()) request.controller.abort() })
       this.busy = true
       const finishLoading = this.beginLoading('config-clone', label)
       try { return await withAbort(action({signal}), signal) }
-      finally { request.finish(); modal.destroy(); this.modal = null; this.busy = false; finishLoading(); this.render() }
+      finally { request.finish(); lifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
     }
     let apps
     try { apps = await load('Loading source apps…', options => this.api.pipelineApps(pipeline.id, options)) }
@@ -1439,20 +1419,27 @@ export class Dashboard {
 
   async commandPane(app, args, invocation) {
     this.invalidateAppSnapshot(app.id)
-    const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '90%', height: '85%', ...frame(),
       label: ` ${icons.code}  Heroku CLI · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
+    let result = null
+    const lifecycle = new ModalLifecycle(this, modal, {onClose: ({restoreFocus}) => {
+      if (!restoreFocus) return
+      if (result) this.setStatus(result.code === 0 ? 'Heroku command completed.' : `Heroku command exited with ${result.signal ?? `code ${result.code}`}.`, result.code === 0 ? 'success' : 'warning')
+      else this.setStatus('Heroku command stopped.', 'warning')
+    }})
     const output = blessed.box({parent: modal, top: 1, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true,
       tags: false, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
     bindMovementKeys(output)
     const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
       content: `${shortcut('Esc / q', 'close and stop')}   ${shortcut('j/k', 'scroll')}\n${paint('Running…', 'info')}`, style: {fg: palette.muted, bg: palette.bg}})
     const controller = new AbortController()
-    const request = {controller, modal}
+    const request = {controller, modal, close: options => lifecycle.close(options)}
     this.commandRequest = request
-    this.modal = modal
+    lifecycle.addCleanup(() => {
+      if (this.commandRequest === request) this.commandRequest = null
+      controller.abort()
+    })
     let raw = `$ ${invocation}\n\n`
-    let result = null
     const draw = chunk => {
       if (this.closed || this.commandRequest !== request) return
       raw = `${raw}${chunk}`.slice(-200_000)
@@ -1460,18 +1447,7 @@ export class Dashboard {
       output.setScrollPerc(100)
       this.render()
     }
-    const close = () => {
-      if (this.commandRequest !== request) return
-      controller.abort()
-      this.commandRequest = null
-      this.modal = null
-      modal.destroy()
-      if (!this.closed) {
-        previous?.focus()
-        if (result) this.setStatus(result.code === 0 ? 'Heroku command completed.' : `Heroku command exited with ${result.signal ?? `code ${result.code}`}.`, result.code === 0 ? 'success' : 'warning')
-        else this.setStatus('Heroku command stopped.', 'warning')
-      }
-    }
+    const close = () => lifecycle.close()
     modal.key(['escape', 'q'], close)
     output.key(['escape', 'q'], close)
     output.focus()
@@ -1496,13 +1472,15 @@ export class Dashboard {
     if (this.demo) { this.setStatus('Log streaming is disabled in the offline demo.', 'warning'); return }
     const app = this.app
     const generation = this.generation
-    const previous = this.screen.focused
     const buffer = new LogBuffer()
     const matchHighlight = `\x1b[48;5;${blessed.colors.convert(palette.logMatch)}m`
     const matchForeground = `\x1b[38;5;${blessed.colors.convert(palette.logMatchFg)}m`
     const controller = new AbortController()
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '95%', height: '85%', ...frame(),
       label: ` ${icons.code}  Logs · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
+    const lifecycle = new ModalLifecycle(this, modal, {onClose: ({restoreFocus}) => {
+      if (restoreFocus) this.setStatus('Log viewer closed.')
+    }})
     const heading = blessed.box({parent: modal, top: 0, left: 2, right: 2, height: 1, tags: false,
       style: {fg: palette.muted, bg: palette.bg}})
     const output = blessed.box({parent: modal, top: 2, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true,
@@ -1510,9 +1488,8 @@ export class Dashboard {
     bindMovementKeys(output)
     const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
       style: {fg: palette.muted, bg: palette.bg}})
-    const request = {controller, modal, output, close: null}
+    const request = {controller, modal, output, close: options => lifecycle.close(options)}
     this.logRequest = request
-    this.modal = modal
     let input = null
     let timer = null
     let status = 'Connecting…'
@@ -1529,18 +1506,14 @@ export class Dashboard {
       footer.setContent(`${shortcut('p / Space', buffer.paused ? 'resume' : 'pause')}  ${shortcut('/', 'filter')}  ${shortcut('End', 'follow')}  ${shortcut('Esc / q', 'close')}\n${paint(`${buffer.paused ? 'Paused display' : 'Following'} · ${status}`, buffer.paused ? 'warning' : tone)}`)
       this.render()
     }
-    request.close = ({restoreFocus = true} = {}) => {
-      if (this.logRequest !== request) return
-      this.logRequest = null
+    lifecycle.addCleanup(() => {
+      if (this.logRequest === request) this.logRequest = null
       controller.abort()
       clearTimeout(timer)
       buffer.clear()
       input?._done?.('stop')
       input = null
-      modal.destroy()
-      if (this.modal === modal) this.modal = null
-      if (restoreFocus && !this.closed) { previous?.focus(); this.setStatus('Log viewer closed.') }
-    }
+    })
     const pause = () => { buffer.pause(); draw() }
     const resume = () => { buffer.resume(); draw() }
     const historyScope = () => {
@@ -1652,13 +1625,12 @@ export class Dashboard {
   }
 
   help() {
-    const previous = this.screen.focused
     const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '85%', height: '85%', ...frame(), label: ` ${icons.keyboard}  Keyboard shortcuts `, padding: {left: 2, top: 1}, scrollable: true, keys: true, vi: true,
       content: 'NAVIGATION\n  t / p / a       Browse teams / pipelines / apps\n  j / k, ↑ / ↓    Move selection or scroll details\n  Ctrl-N / Ctrl-P Move down / up in lists or scrollable panes\n  Enter           Open selected team, pipeline, or app\n  Tab / Shift-Tab Focus next / previous pane\n  /               Filter sidebar by name\n  1–7             Select app view\n  h / l, [ / ]    Previous / next app view (also ← / →)\n  R / g           Refresh current app, pipeline, or workspace\n  o               Open current view / selected add-on dashboard\n  q / Ctrl-C      Quit\n\nPIPELINE ACTIONS\n  A               Create an app: stage, name, and runtime region\n  P               Promote the selected app to a higher stage\n                  Also works from an app view within a pipeline\n\nAPP ACTIONS\n  :               Run app-scoped Heroku CLI command\n  C               Open the default app console\n  s               Scale selected process in Overview / Resources\n  x               Stop process / delete config var / remove custom domain\n  r               Restart selected process or dyno in Resources\n  v               Reveal / hide selected config variable\n  y               Copy config value / custom domain CNAME to clipboard\n  Y (Config)      Clone from a pipeline app into this app, only if empty\n  e / n           Replace / create config variable\n  D               Add a domain and optionally enable ACM in Settings\n  m               Toggle maintenance in Settings\n  T (Metrics)     Cycle Past 2 / 24 / 72 hours / 7 days\n\nBuilt-in remote changes require typing the exact target app name.\nAll text inputs support readline editing shortcuts.\nCustom commands use y/n or ←/→ and Enter for confirmation.\nConsole and Heroku run commands temporarily take over the terminal.\n--read-only disables mutations and custom commands.\nCustom commands reject app / remote selectors.\nStopping a process scales it to 0; use s to scale it back up.\nConfig values are masked and fetched only on opening Config.\nEach variable toggles independently; moving rows keeps values visible.\nLeaving the tab or app hides revealed values.\nCopying works while masked and in read-only mode.\nClick cyan domain Hostname / CNAME values to copy them.\n\nMetrics include throughput, latency, memory, and dyno load.\nSelect a metric for a chart over the chosen timeframe and sample details.\nMissing samples are gaps; load average is not CPU percent.\n\nPress Esc, ?, or q to close help.'})
     modal.setContent(highlightKeys(`${modal.content}\n\nLOG VIEWER\n  L               Tail logs for the current app (also in read-only mode)\n  p / Space       Pause / resume display; scrolling up also pauses\n  /               Filter buffered lines (text or regex; case-insensitive)\n  ↑/↓, Ctrl-P/N   Browse pipeline filter history in the filter input\n  End             Resume following the latest logs\n  Esc / q         Close viewer and stop streaming`))
-    this.modal = modal
+    const lifecycle = new ModalLifecycle(this, modal)
     bindMovementKeys(modal)
-    modal.key(['escape', '?', 'q'], () => { modal.destroy(); this.modal = null; previous?.focus(); this.render() })
+    modal.key(['escape', '?', 'q'], () => lifecycle.close())
     modal.focus()
     this.render()
   }
@@ -1666,21 +1638,16 @@ export class Dashboard {
   close() {
     if (this.closed) return
     this.closed = true
-    this.logRequest?.close({restoreFocus: false})
+    this.modalLifecycle?.close({restoreFocus: false})
     this.readRequests.cancelAll()
     this.metricsRequest = null
-    this.commandRequest?.controller.abort()
-    this.commandRequest = null
     this.interactiveRequest?.controller.abort()
     this.interactiveRequest = null
-    this.promotionRequest?.controller.abort()
-    this.promotionRequest = null
     this.telemetry = null
     clearInterval(this.timer)
     this.loading.clear()
     this.syncLoadingAnimation()
     this.generation++
-    this.cancelPrompt?.()
     this.config = null
     this.appSnapshots.clear()
     if (!this.screen.destroyed) this.screen.destroy()
