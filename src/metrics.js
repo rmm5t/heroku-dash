@@ -151,11 +151,13 @@ export function memoryUsage(metric) {
   return {key, values: metric?.series[key] ?? []}
 }
 
-export function sparkline(values, width = 40) {
+export function sparkline(values, width = Math.min(40, values.length)) {
   if (!values.length || !values.some(value => sample(value) !== null)) return 'No samples'
-  const length = Math.min(width, values.length)
+  const length = width
   const reduced = Array.from({length}, (_, i) => {
-    const group = values.slice(Math.floor(i * values.length / length), Math.floor((i + 1) * values.length / length))
+    const start = Math.floor(i * values.length / length)
+    // Coarse buckets span multiple glyphs when the requested width exceeds the sample count.
+    const group = values.slice(start, Math.max(start + 1, Math.floor((i + 1) * values.length / length)))
     // A gap remains visible even when several source buckets share one glyph.
     return group.some(value => sample(value) === null) ? null : group.reduce((sum, value) => sum + value, 0) / group.length
   })

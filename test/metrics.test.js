@@ -59,6 +59,15 @@ test('sparklines preserve gaps, zero values, and constant nonzero readings', () 
   assert.equal(sparkline([null, null]), 'No samples')
 })
 
+test('coarse Basic-dyno buckets fill the requested sparkline width without interpolating values or gaps', () => {
+  const values = [0, 1, 2, 3, null, 5, 6, 7, 8, 9, 10, 11]
+  const buckets = sparkline(values, 12)
+  assert.equal(sparkline(values, 24), [...buckets].map(bar => bar.repeat(2)).join(''))
+  assert.equal(sparkline([0, null, 10], 8), '▁▁▁···██')
+  assert.equal(sparkline([0], 24), '▁'.repeat(24))
+  assert.equal(sparkline([2], 24), '▄'.repeat(24))
+})
+
 test('telemetry uses canonical IDs, GET-only access, process_type, and tier-aware resolution', async () => {
   const requests = []
   const api = new HerokuAPI({async request(path, options) {

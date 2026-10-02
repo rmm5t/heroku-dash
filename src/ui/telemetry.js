@@ -37,7 +37,7 @@ export function telemetryRows(data, state = {}) {
     rows.push({id: `telemetry:${id}`, processType, label: single(`${title} · ${scope} · ${format(stats.latest, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
       metricChart: {title, scope, metric, values, unit, stats, reference, windowLabel, state: status ?? 'Recent', details: clean(facts)},
       icon: title.startsWith('Latency') ? 'clock' : 'metrics', tone: status === 'Stale' ? 'warning' : error ? 'error' : status ? 'muted' : 'info',
-      columns: [title, scope, format(stats.latest, unit, true), status ?? sparkline(values, 12)], emphasis: status,
+      columns: [title, scope, format(stats.latest, unit, true), status ?? sparkline(values, 24)], emphasis: status,
     })
   }
 

@@ -53,7 +53,7 @@ export const TAB_DEFINITIONS = [
       {label: 'Metric / Process', compact: 'Metric', min: 14, weight: 3},
       {label: 'Scope / Limit', compact: 'Scope/Limit', min: 11, weight: 1, max: 18},
       {label: 'Latest', min: 11, weight: 1, max: 18, right: true},
-      {label: 'Trend / State', compact: 'Trend/State', min: 13, weight: 2, max: 24},
+      {label: 'Trend / State', compact: 'Trend/State', min: 26, weight: 4, max: 48},
     ],
   },
 ]
