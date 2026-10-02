@@ -9,7 +9,7 @@ import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
 import {autoRefreshSections, RefreshBackoff} from '../refresh-policy.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
-import {parseDynoQuantity, validateConfigKey, validateDynoSize} from '../validation.js'
+import {parseDynoQuantity, validateConfigKey} from '../validation.js'
 import {age, appRows, clean, single, sortApps, STAGES} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
@@ -870,6 +870,7 @@ export class Dashboard {
       blessed.box({parent: modal, top: 1, left: 2, right: 2, height: 3, content: highlightKeys(description), tags: false,
         style: {fg: palette.fg, bg: palette.bg}})
       const list = blessed.list({parent: modal, top: 5, bottom: 2, left: 2, right: 2, ...frame(), keys: true, mouse: true,
+        scrollbar: {ch: '│', style: {bg: palette.border}},
         items: choices.map(choice => single(choice.label)), style: {...frame().style, selected: {fg: palette.bg, bg: palette.accent}}})
       bindMovementKeys(list)
       blessed.text({parent: modal, bottom: 0, left: 2, content: `${shortcut('↑/↓', 'select')}   ${shortcut('Enter', 'continue')}   ${shortcut('Esc', 'cancel')}`, style: {bg: palette.bg}})
@@ -1121,17 +1122,38 @@ export class Dashboard {
     if (row?.kind !== 'formation') { this.setStatus(`Select a process type (${icons.resources}) to scale.`); return }
     const app = this.app
     const formation = row.value
+    const generation = this.generation
+    const current = () => !this.closed && generation === this.generation && this.app?.id === app.id
     const quantity = await this.prompt('Scale dynos · quantity', `${app.name} / ${formation.type}\nCurrent: ${formation.quantity} × ${formation.size}\nEnter desired quantity (0 stops this process).`, String(formation.quantity))
-    if (quantity === null) return
+    if (quantity === null || !current()) return
     let numericQuantity
     try { numericQuantity = parseDynoQuantity(quantity, 'Quantity must be a non-negative integer.') }
     catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
-    const size = await this.prompt('Scale dynos · size', `${app.name} / ${formation.type}\nEnter a Heroku dyno size (for example Standard-1X).`, formation.size)
-    if (size === null) return
-    try { validateDynoSize(size, 'Dyno size cannot be blank.') }
-    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
-    const confirmation = await this.confirm(app, `Scale ${formation.type}: ${formation.quantity} × ${formation.size} → ${quantity} × ${size.trim()}.\nThis can restart dynos and change billing.`)
-    if (confirmation) await this.mutate(() => this.api.scale(app.name, formation.type, numericQuantity, size, confirmation))
+    let result
+    try {
+      result = await this.prepareRead('scale-options', 'Loading available dyno sizes…', async options => {
+        const sizes = (await this.api.appDynoSizes(app, options))
+          .filter(size => size.name.toLowerCase() !== 'basic' || numericQuantity <= 1)
+        if (!sizes.length) throw new Error('No dyno sizes are available for this app.')
+        return sizes
+      }, current)
+    } catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    if (!result || !current()) return
+    const sizes = result.value
+    const size = await this.choose('Scale dynos · size', `${app.name} / ${formation.type}\nCurrent: ${formation.size} · Requested quantity: ${quantity}\nChoose a dyno size (Basic supports at most 1 dyno).`,
+      sizes.map(item => {
+        const specs = [item.name]
+        if (Number.isFinite(item.memory)) specs.push(`${item.memory} GB RAM`)
+        if (Number.isFinite(item.compute)) {
+          const sharing = item.dedicated === true ? ' (dedicated)' : item.dedicated === false ? ' (shared)' : ''
+          specs.push(`${item.compute} vCPU${item.compute === 1 ? '' : 's'}${sharing}`)
+        }
+        return {label: specs.join(' · '), value: item.name}
+      }),
+      sizes.findIndex(item => item.name.toLowerCase() === formation.size.toLowerCase()))
+    if (size === null || !current()) return
+    const confirmation = await this.confirm(app, `Scale ${formation.type}: ${formation.quantity} × ${formation.size} → ${quantity} × ${size}.\nThis can restart dynos and change billing.`)
+    if (confirmation && current()) await this.mutate(() => this.api.scale(app.name, formation.type, numericQuantity, size, confirmation))
   }
 
   async dynoAction(action) {

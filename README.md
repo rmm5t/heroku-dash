@@ -170,7 +170,7 @@ App actions:
 
 | Key | View | Action |
 | --- | --- | --- |
-| `s` | Overview / Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and dyno size |
+| `s` | Overview / Resources | Scale the selected process row (server icon, `[s] scale`); enter quantity and select a dyno size available for the app |
 | `x` | Resources | Stop the selected process type by scaling it to zero |
 | `r` | Resources | Restart the selected process type or specific dyno |
 | `v` | Config | Reveal / hide the selected value |
@@ -209,7 +209,7 @@ In a pipeline workspace, press **`A`** to create an app. Choose development, sta
 
 Press **`P`** on a selected pipeline app or from an app view to promote its latest release. Choose a populated higher stage in the development → staging → production sequence, review the destination apps, and type the source app’s exact name to confirm. Promotion deploys to all apps in the chosen stage and restarts their dynos. Dash tracks each destination’s status and reports deployment failures. Promotion is disabled in read-only and demo modes.
 
-Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. Pressing `x` on a process scales it to zero; use `s` to scale it back up. Individual dynos can be restarted but not stopped through the dashboard because Heroku automatically replaces stopped formation dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
+Every built-in write displays the target app and proposed change, then requires typing the **exact app name**. Scaling can change billing and restart dynos. The size selector shows RAM and reported vCPU allocation per dyno, including whether compute is shared or dedicated when that metadata is available. It includes Standard and higher tiers for the app's runtime regardless of its current size; Basic is selectable when the requested quantity is zero or one per process. Eco dynos are only offered for personal apps, not team-owned apps. Pressing `x` on a process scales it to zero; use `s` to scale it back up. Individual dynos can be restarted but not stopped through the dashboard because Heroku automatically replaces stopped formation dynos. Config changes create a release and restart the app. Maintenance mode affects request serving.
 
 In **5 Settings**, press **`D`** (`Shift-D`) to add a custom domain. Enter the hostname, choose whether to enable app-wide Automatic Certificate Management (ACM) if it is currently disabled, then confirm with the exact app name. Configure DNS using the new domain’s CNAME; certificate issuance depends on correct DNS configuration. The Details pane highlights available **Hostname** and **CNAME** values in cyan—click either value to copy it, including wrapped portions. Domain copying also works in read-only mode. If the domain is created but enabling ACM fails, the domain remains added and the status explains the failure.
 

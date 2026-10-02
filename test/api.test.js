@@ -476,6 +476,47 @@ test('confirmed mutations target exactly the app and process requested', async (
   ])
 })
 
+test('dyno sizes use the full catalog, paginate, and order by memory and size name', async () => {
+  const controller = new AbortController()
+  const calls = []
+  const api = new HerokuAPI({async request(path, options) {
+    assert.equal(path, '/dyno-sizes')
+    assert.equal(options.method, 'GET')
+    assert.equal(options.signal, controller.signal)
+    calls.push(options.headers.Range)
+    return calls.length === 1
+      ? {body: [{name: 'performance-m', memory: 2.5}, {name: 'standard-2x', memory: 1}], headers: {'next-range': 'name standard-2x..'}}
+      : {body: [{name: 'standard-1x', memory: 0.5}, {name: 'basic', memory: 0.5}]}
+  }}, {readOnly: true})
+  assert.deepEqual((await api.appDynoSizes({id: 'app-id'}, {signal: controller.signal})).map(size => size.name),
+    ['basic', 'standard-1x', 'standard-2x', 'performance-m'])
+  assert.deepEqual(calls, [undefined, 'name standard-2x..'])
+})
+
+test('dyno-size choices match the app generation and Common Runtime or Private Space', async () => {
+  const sizes = [
+    {name: 'basic', generation: {name: 'cedar'}, private_space_only: false},
+    {name: 'standard-1x', generation: {name: 'cedar'}, private_space_only: false},
+    {name: 'performance-m', generation: {name: 'cedar'}, private_space_only: false},
+    {name: 'private-s', generation: {name: 'cedar'}, private_space_only: true},
+    {name: '1x', generation: {name: 'fir'}, private_space_only: true},
+  ]
+  const api = new HerokuAPI({async request() { return {body: sizes} }})
+  for (const [app, expected] of [
+    [{generation: {name: 'cedar'}, space: null}, ['basic', 'performance-m', 'standard-1x']],
+    [{generation: {name: 'cedar'}, space: {id: 'space-id'}}, ['private-s']],
+    [{generation: {name: 'fir'}, space: {id: 'space-id'}}, ['1x']],
+  ]) assert.deepEqual((await api.appDynoSizes(app)).map(size => size.name), expected)
+})
+
+test('Eco dynos are available for personal apps but excluded from team-owned apps', async () => {
+  const api = new HerokuAPI({async request() {
+    return {body: [{name: 'Eco', memory: 0.5}, {name: 'Basic', memory: 0.5}, {name: 'Standard-1X', memory: 0.5}]}
+  }})
+  assert.deepEqual((await api.appDynoSizes({team: null})).map(size => size.name), ['Basic', 'Eco', 'Standard-1X'])
+  assert.deepEqual((await api.appDynoSizes({team: {id: 'team-id', name: 'acme'}})).map(size => size.name), ['Basic', 'Standard-1X'])
+})
+
 test('app creation validates inputs before creating any remote resource', async () => {
   const api = new HerokuAPI({request() { assert.fail('Invalid creation reached network') }})
   const options = {pipeline: {id: 'pipeline-id', owner: {type: 'user', id: 'user-id'}}, stage: 'staging', name: 'new-app', region: 'eu'}

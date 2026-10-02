@@ -255,6 +255,17 @@ export class HerokuAPI {
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
+  async appDynoSizes(app, options) {
+    // The app-specific catalog is restricted by the current formation's tier.
+    // Use the full catalog so scaling can move between Basic and larger sizes.
+    const generation = app.generation?.name ?? 'cedar'
+    return (await this.list('/dyno-sizes', options))
+      .filter(size => (size.generation?.name ?? 'cedar') === generation
+        && Boolean(size.private_space_only) === Boolean(app.space)
+        && (!app.team || size.name.toLowerCase() !== 'eco'))
+      .sort((a, b) => a.memory - b.memory || a.name.localeCompare(b.name, undefined, {numeric: true}))
+  }
+
   async createPipelineApp({pipeline, stage, name, region}, confirmation) {
     this.confirm(name, confirmation)
     validateAppName(name)

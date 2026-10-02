@@ -53,6 +53,7 @@ export function createDemo() {
   api.catalog = async () => structuredClone(catalog)
   api.pipelineApps = async () => structuredClone(apps)
   api.appData = async id => data(apps.find(a => a.id === id || a.name === id))
+  api.appDynoSizes = async () => [{name: 'Basic', memory: 0.5}, {name: 'Standard-1X', memory: 0.5}, {name: 'Standard-2X', memory: 1}]
   api.config = async () => ({NODE_ENV: 'production', EXAMPLE_SECRET: 'demo-only-value', WEB_CONCURRENCY: '2'})
   return {api, catalog, fetchMetrics: async (data, options = {}) => demoTelemetry(data, options.now ?? Date.now(), options.windowHours ?? 2), resources: {available: false, message: 'Cost and limit lookup is disabled in the offline demo.'}, context: {pipeline, reason: 'Offline demo'}}
 }

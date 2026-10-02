@@ -3037,6 +3037,13 @@ test('scale cancellation and mismatched confirmation never call the API', async 
   assert.equal(writes, 0)
   assert.equal(d.modal, null)
   await key('s')
+  await key('\r')
+  assert.ok(d.modal.children.some(child => child.type === 'list'))
+  await key('\x1b')
+  await delay(50)
+  assert.equal(writes, 0)
+  assert.equal(d.modal, null)
+  await key('s')
   await key('\x15') // Ctrl-U clears the pre-filled quantity.
   await key('0')
   await key('\r')
@@ -3059,7 +3066,6 @@ test('invalid scaling input stops before confirmation and retains action-specifi
     ...['', ' ', ' 2 ', '+2', '-0', '-1', '1.5', '1e2', '0x2', '9007199254740992'].map(quantity => ({
       inputs: [quantity], message: 'Quantity must be a non-negative integer.',
     })),
-    ...['', ' \t '].map(size => ({inputs: ['2', size], message: 'Dyno size cannot be blank.'})),
   ]
   for (const {inputs, message} of cases) {
     const responses = [...inputs]
@@ -3075,7 +3081,7 @@ test('invalid scaling input stops before confirmation and retains action-specifi
   }
 })
 
-test('scaling parses decimal prompt input while preserving its confirmed display and size', async t => {
+test('scaling parses decimal prompt input while preserving its confirmed display and selected size', async t => {
   const {dashboard: d} = await harness(t, {demo: false})
   d.api.readOnly = false
   await d.openApp(d.catalog.apps[0])
@@ -3083,21 +3089,35 @@ test('scaling parses decimal prompt input while preserving its confirmed display
   const writes = []
   d.api.scale = async (...args) => { writes.push(args) }
   for (const [entered, expected] of [['000', 0], ['002', 2], ['9007199254740991', Number.MAX_SAFE_INTEGER]]) {
-    const responses = [entered, ' Standard-2X ']
+    const responses = [entered]
     d.prompt = async () => responses.shift()
+    d.choose = async () => 'Standard-2X'
     d.confirm = async (app, description) => {
       assert.ok(description.includes(`→ ${entered} × Standard-2X.`))
       return app.name
     }
     await d.scale()
-    assert.deepEqual(writes.at(-1), [d.app.name, 'web', expected, ' Standard-2X ', d.app.name])
+    assert.deepEqual(writes.at(-1), [d.app.name, 'web', expected, 'Standard-2X', d.app.name])
     assert.equal(responses.length, 0)
   }
 })
 
-test('scaling prompts edit pre-filled inputs with readline and send exact values to the API', async t => {
+test('scaling edits quantity with readline and selects an available dyno size without free-form input', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
+  let sizeReads = 0
+  demo.api.appDynoSizes = async (app, {signal}) => {
+    assert.equal(app.id, 'app-staging')
+    assert.equal(signal.aborted, false)
+    sizeReads++
+    return [
+      {name: 'basic', memory: 0.5},
+      {name: 'standard-1x', memory: 0.5, compute: 1, dedicated: false},
+      {name: 'standard-2x', memory: 1, compute: 1, dedicated: false},
+      {name: 'performance-m', memory: 2.5, compute: 2, dedicated: true},
+      {name: 'performance-l', memory: 14, compute: null},
+    ]
+  }
   const writes = []
   demo.api.scale = async (...args) => { writes.push(args) }
   const {dashboard: d, key} = await harness(t, demo)
@@ -3107,13 +3127,112 @@ test('scaling prompts edit pre-filled inputs with readline and send exact values
   await key('\x01\x04')
   await key('3')
   await key('\r')
-  await key('\x02\x02\x04')
-  await key('2')
-  assert.equal(d.modal.children.find(child => child.type === 'textbox').getValue(), 'Standard-2X')
+  const list = d.modal.children.find(child => child.type === 'list')
+  assert.ok(!d.modal.children.some(child => child.type === 'textbox'))
+  assert.deepEqual(list.items.map(item => clean(item.content)), [
+    'standard-1x · 0.5 GB RAM · 1 vCPU (shared)',
+    'standard-2x · 1 GB RAM · 1 vCPU (shared)',
+    'performance-m · 2.5 GB RAM · 2 vCPUs (dedicated)',
+    'performance-l · 14 GB RAM',
+  ])
+  assert.equal(list.selected, 0) // Match the current size despite API casing.
+  await key('\x0e') // Ctrl-N selects the next dyno size.
+  assert.equal(list.selected, 1)
   await key('\r')
+  assert.match(d.modal.children.map(child => child.content).join('\n'), /3 × standard-2x/)
   await key('constellation-staging')
   await key('\r')
-  assert.deepEqual(writes, [['constellation-staging', 'web', 3, 'Standard-2X', 'constellation-staging']])
+  assert.equal(sizeReads, 1)
+  assert.deepEqual(writes, [['constellation-staging', 'web', 3, 'standard-2x', 'constellation-staging']])
+})
+
+test('scaling allows Basic upgrades and single-dyno downgrades based on the requested process quantity', async t => {
+  const {dashboard: d} = await harness(t)
+  d.api.readOnly = false
+  await d.openApp(d.catalog.apps[0])
+  d.changeTab(1)
+  delete d.api.appDynoSizes // Exercise the real catalog lookup rather than the demo stub.
+  d.api.list = async path => {
+    assert.equal(path, '/dyno-sizes')
+    return [
+      {name: 'Eco', memory: 0.5},
+      {name: 'Basic', memory: 0.5}, {name: 'Standard-1X', memory: 0.5},
+      {name: 'Standard-2X', memory: 1}, {name: 'Performance-M', memory: 2.5},
+    ]
+  }
+  const writes = []
+  d.api.scale = async (...args) => { writes.push(args) }
+  d.confirm = async app => app.name
+  for (const [currentSize, currentQuantity, requestedQuantity, selectedSize] of [
+    ['Basic', 1, 1, 'Standard-2X'],
+    ['Basic', 1, 3, 'Standard-1X'],
+    ['Standard-1X', 1, 1, 'Basic'],
+    ['Standard-2X', 3, 1, 'Basic'],
+    ['Standard-1X', 1, 0, 'Basic'],
+    ['Standard-1X', 1, 2, 'Standard-2X'],
+  ]) {
+    d.main.select(d.rows.findIndex(row => row.id === 'formation:web'))
+    Object.assign(d.rows[d.main.selected].value, {size: currentSize, quantity: currentQuantity})
+    d.prompt = async () => String(requestedQuantity)
+    d.choose = async (_title, _description, choices, initial) => {
+      const names = choices.map(choice => choice.value)
+      assert.deepEqual(names, requestedQuantity <= 1
+        ? ['Basic', 'Standard-1X', 'Standard-2X', 'Performance-M']
+        : ['Standard-1X', 'Standard-2X', 'Performance-M'])
+      assert.equal(initial, names.indexOf(currentSize))
+      assert.ok(names.includes(selectedSize))
+      return selectedSize
+    }
+    await d.scale()
+    assert.deepEqual(writes.at(-1), [d.app.name, 'web', requestedQuantity, selectedSize, d.app.name])
+  }
+})
+
+test('scaling stops before selection or confirmation when available dyno sizes cannot be loaded', async t => {
+  const {dashboard: d} = await harness(t)
+  d.api.readOnly = false
+  await d.openApp(d.catalog.apps[0])
+  d.main.select(d.rows.findIndex(row => row.kind === 'formation'))
+  d.prompt = async () => '2'
+  d.choose = () => assert.fail('Unavailable sizes must not open a selection')
+  d.confirm = () => assert.fail('Unavailable sizes must not reach confirmation')
+  d.api.scale = () => assert.fail('Unavailable sizes must not write')
+  for (const message of ['Sizes unavailable', 'No dyno sizes are available for this app.']) {
+    d.api.appDynoSizes = async () => {
+      if (message === 'Sizes unavailable') throw new Error(message)
+      return []
+    }
+    await d.scale()
+    assert.equal(d.message, message)
+    assert.equal(d.messageTone, 'error')
+    assert.equal(d.busy, false)
+    assert.equal(d.modal, null)
+  }
+})
+
+test('canceling dyno-size loading aborts the read and leaves a newer dialog intact', async t => {
+  const {dashboard: d, key} = await harness(t)
+  d.api.readOnly = false
+  await d.openApp(d.catalog.apps[0])
+  d.main.select(d.rows.findIndex(row => row.kind === 'formation'))
+  const pending = Promise.withResolvers()
+  let signal
+  d.api.appDynoSizes = (_id, options) => { signal = options.signal; return pending.promise }
+  d.api.scale = () => assert.fail('Canceled size loading must not write')
+  const scaling = d.scale()
+  await new Promise(resolve => setImmediate(resolve))
+  await key('\r')
+  assert.ok(signal)
+  d.modal.destroy()
+  assert.equal(signal.aborted, true)
+  assert.equal(d.busy, false)
+  const next = d.prompt('Next prompt', 'A newer dialog stays active.')
+  const modal = d.modal
+  pending.resolve([{name: 'Standard-1X', memory: 0.5}])
+  await scaling
+  assert.equal(d.modal, modal)
+  d.modalLifecycle.close()
+  assert.equal(await next, null)
 })
 
 test('slow app response cannot overwrite a newer selection', async t => {
