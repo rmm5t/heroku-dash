@@ -96,14 +96,14 @@ test('Retry-After supports seconds and HTTP dates, and app lookup failures retai
   await assert.rejects(api.appData('app'), error => error.statusCode === 429 && error.retryAfterMs === 90_000)
 })
 
-test('release reads stop the real HTTP transport at the newest page instead of following Next-Range', {timeout: 2000}, async t => {
+test('release reads request the newest 20 releases in one HTTP page without following Next-Range', {timeout: 2000}, async t => {
   const calls = []
-  const releases = Array.from({length: 100}, (_, index) => ({version: 400 - index}))
+  const releases = Array.from({length: 20}, (_, index) => ({version: 400 - index}))
   const server = createServer((request, response) => {
     calls.push({path: request.url, range: request.headers.range})
     response.writeHead(calls.length === 1 ? 206 : 200, {'content-type': 'application/json',
-      ...(calls.length === 1 ? {'next-range': 'version ..300; order=desc,max=100;'} : {})})
-    response.end(JSON.stringify(calls.length === 1 ? releases : [{version: 300}]))
+      ...(calls.length === 1 ? {'next-range': 'version ..380; order=desc,max=20;'} : {})})
+    response.end(JSON.stringify(calls.length === 1 ? releases : [{version: 380}]))
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => {
@@ -115,7 +115,7 @@ test('release reads stop the real HTTP transport at the newest page instead of f
   const Transport = HTTP.create({host: '127.0.0.1', port: server.address().port, protocol: 'http:'})
   const api = new HerokuAPI({http: Transport}, {readOnly: true})
   const data = await api.appData('app', {previous: {app: {id: 'app'}}, sections: ['releases'], partial: false, agent})
-  assert.deepEqual(calls, [{path: '/apps/app/releases', range: 'version ..; order=desc,max=100;'}])
+  assert.deepEqual(calls, [{path: '/apps/app/releases', range: 'version ..; order=desc,max=20;'}])
   assert.deepEqual(data.releases, releases)
   assert.equal(data.errors.releases, undefined)
 })
@@ -132,9 +132,9 @@ test('oversized release responses and retained snapshots are capped newest-first
   const previous = {app: {id: 'app'}, releases}
   const updates = []
   const data = await api.appData('app', {previous, sections: ['releases'], onUpdate: snapshot => updates.push(snapshot)})
-  assert.equal(data.releases.length, 100)
+  assert.equal(data.releases.length, 20)
   assert.equal(data.releases[0].version, 350)
-  assert.equal(data.releases.at(-1).version, 251)
+  assert.equal(data.releases.at(-1).version, 331)
   assert.deepEqual(updates[0].releases, data.releases)
   assert.equal(previous.releases.length, 350)
   assert.equal(previous.releases[0].version, 1)
@@ -803,7 +803,7 @@ test('app sections fail independently and config is fetched lazily', async () =>
   assert.match(data.errors.addons, /permission/)
   assert.deepEqual(data.dynos, [])
   assert.ok(!calls.some(c => c.path.endsWith('/config-vars')))
-  assert.equal(calls.find(c => c.path.endsWith('/releases')).options.headers.Range, 'version ..; order=desc,max=100;')
+  assert.equal(calls.find(c => c.path.endsWith('/releases')).options.headers.Range, 'version ..; order=desc,max=20;')
   assert.equal(calls.find(c => c.path.endsWith('/releases')).options.partial, true)
 })
 

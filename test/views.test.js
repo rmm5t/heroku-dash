@@ -36,20 +36,20 @@ test('all views render demo data and errors without exposing config inadvertentl
   assert.match(JSON.stringify(appRows('Metrics', data)), /unavailable/)
 })
 
-test('Releases, Overview, and Metrics use only the newest 100 releases from oversized snapshots', async () => {
+test('Releases, Overview, and Metrics use only the newest 20 releases from oversized snapshots', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)
   data.releases = Array.from({length: 350}, (_, index) => ({...data.releases[0],
-    version: index + 1, status: index < 250 ? 'failed' : 'succeeded'}))
+    version: index + 1, status: index < 330 ? 'failed' : 'succeeded'}))
   const rows = appRows('Releases', data)
-  assert.equal(rows.length, 100)
+  assert.equal(rows.length, 20)
   assert.equal(rows[0].columns[0], 'v350')
-  assert.equal(rows.at(-1).columns[0], 'v251')
+  assert.equal(rows.at(-1).columns[0], 'v331')
   assert.ok(appRows('Overview', data).some(row => row.label.startsWith('Latest release: v350')))
   const metrics = appRows('Metrics', data).find(row => row.id === 'releases')
-  assert.match(metrics.detail, /Latest 100 releases \(up to 100\)/)
+  assert.match(metrics.detail, /Latest 20 releases \(up to 20\)/)
   assert.match(metrics.detail, /0 failed releases/)
-  assert.equal(metrics.columns[1], 100)
+  assert.equal(metrics.columns[1], 20)
   assert.equal(data.releases.length, 350)
   assert.equal(data.releases[0].version, 1)
 })

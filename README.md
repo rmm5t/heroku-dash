@@ -141,7 +141,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments; optionally view billed costs and capacity limits |
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |
-| **6 Releases** | Inspect the latest 100 releases, including status, author, description, and timestamp |
+| **6 Releases** | Inspect the latest 20 releases, fetched in one API page, including status, author, description, and timestamp |
 | **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and selectable-timeframe charts, alongside dyno health and recent deployment outcomes |
 
 ### Keyboard shortcuts
