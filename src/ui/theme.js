@@ -40,7 +40,6 @@ export const icons = {
   keyboard: '\uf11c', chevron: '\uf105',
 }
 
-export const tabIcons = ['overview', 'resources', 'addons', 'config', 'settings', 'releases', 'metrics']
 export const stageStyles = {
   development: {icon: 'code', tone: 'info'},
   review: {icon: 'review', tone: 'accent'},

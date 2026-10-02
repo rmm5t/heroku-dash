@@ -1,5 +1,6 @@
 import blessed from 'blessed'
 import {single} from './text.js'
+import {TAB_DEFINITIONS} from './tabs.js'
 
 export function cell(value, width, right = false) {
   let text = single(value)
@@ -25,43 +26,7 @@ export const TABLE_COLUMNS = {
     {label: 'Region', width: 10},
     {label: 'Stack', width: 12, hideBelow: 72},
   ],
-  Overview: [
-    {label: 'Item / Process', min: 14, weight: 1, max: 24},
-    {label: 'Size / Value', min: 10, weight: 3},
-    {label: 'Qty', width: 4, right: true},
-    {label: 'Status/Action', width: 13},
-  ],
-  Resources: [
-    {label: 'Process / Dyno', min: 14, weight: 1, max: 26},
-    {label: 'Size', min: 12, weight: 2},
-    {label: 'Qty', width: 4, right: true},
-    {label: 'State / Action', width: 14},
-    {label: 'Age', width: 9, hideBelow: 72},
-  ],
-  'Add-ons': [
-    {label: 'Add-on', min: 16, weight: 2},
-    {label: 'Service', min: 14, weight: 1, hideBelow: 78},
-    {label: 'Plan', min: 12, weight: 1},
-    {label: 'State', width: 19},
-  ],
-  Settings: [
-    {label: 'Setting / Type', width: 14},
-    {label: 'Value', min: 16, weight: 4},
-    {label: 'Status / Action', width: 22},
-  ],
-  Releases: [
-    {label: 'Version', width: 7},
-    {label: 'Status', width: 10},
-    {label: 'Age', width: 8, hideBelow: 72},
-    {label: 'User', min: 16, weight: 1, max: 36},
-    {label: 'Description', min: 12, weight: 2},
-  ],
-  Metrics: [
-    {label: 'Metric / Process', compact: 'Metric', min: 14, weight: 3},
-    {label: 'Scope / Limit', compact: 'Scope/Limit', min: 11, weight: 1, max: 18},
-    {label: 'Latest', min: 11, weight: 1, max: 18, right: true},
-    {label: 'Trend / State', compact: 'Trend/State', min: 13, weight: 2, max: 24},
-  ],
+  ...Object.fromEntries(TAB_DEFINITIONS.filter(tab => tab.columns).map(tab => [tab.name, tab.columns])),
 }
 
 export function tableColumns(values, width, layout = 'Overview') {

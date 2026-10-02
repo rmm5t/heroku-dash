@@ -9,7 +9,7 @@ import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
 import {autoRefreshSections, RefreshBackoff} from '../refresh-policy.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
-import {age, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
+import {age, appRows, clean, single, sortApps, STAGES} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {createCommandViewer} from './command-viewer.js'
@@ -17,7 +17,8 @@ import {createLogViewer} from './log-viewer.js'
 import {ModalLifecycle} from './modal-lifecycle.js'
 import {enableReadline} from './readline.js'
 import {runRead} from './read-operation.js'
-import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
+import {pendingSections, TAB_DEFINITIONS, TABS} from './tabs.js'
+import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 import {bindMovementKeys, frame} from './widget-helpers.js'
 
@@ -301,9 +302,9 @@ export class Dashboard {
     const scope = [['teams', team], ['pipelines', pipeline], ['apps', this.app?.name]]
       .filter(([, name]) => name).map(([icon, name]) => badge(icon, name, 'fg')).join(`  ${paint(icons.chevron, 'muted')}  `)
     this.header.setContent(`${paint(`${icons.heroku}  HEROKU DASH`, 'accent', true)}   ${this.demo ? `${badge('staging', 'DEMO', 'info')}   ` : ''}${this.api.readOnly ? badge('lock', 'READ ONLY', 'info') : badge('globe', 'READ / WRITE', 'success')}\n${scope || badge('globe', 'All accessible resources', 'muted')}`)
-    const tabs = compact => TABS.map((tab, i) => i === this.tab
-      ? paint(`[${i + 1} ${icons[tabIcons[i]]} ${tab}]`, 'accent', true)
-      : `${paint(i + 1, 'accent', true)}${paint(` ${icons[tabIcons[i]]}${compact ? '' : ` ${tab}`}`, 'muted')}`)
+    const tabs = compact => TAB_DEFINITIONS.map(({name, icon}, i) => i === this.tab
+      ? paint(`[${i + 1} ${icons[icon]} ${name}]`, 'accent', true)
+      : `${paint(i + 1, 'accent', true)}${paint(` ${icons[icon]}${compact ? '' : ` ${name}`}`, 'muted')}`)
     const fullTabs = tabs(false)
     const compact = blessed.unicode.strWidth(clean(fullTabs.join('  '))) > this.tabs.width - 4
     const labels = compact ? tabs(true) : fullTabs
@@ -565,8 +566,8 @@ export class Dashboard {
 
   drawApp({preserveScroll = false} = {}) {
     if (!this.app) return
-    const tab = TABS[this.tab]
-    this.main.setLabel(highlightKeys(` ${icons[tabIcons[this.tab]]}  ${tab}${tab === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `))
+    const {name: tab, icon} = TAB_DEFINITIONS[this.tab]
+    this.main.setLabel(highlightKeys(` ${icons[icon]}  ${tab}${tab === 'Metrics' ? ` · ${metricsTimeframe(this.metricsWindowHours).label}  [T] timeframe` : ''} `))
     if (!this.data) {
       this.setRows(tab === 'Config' ? appRows(tab, {app: this.app, errors: {}}, {
         config: this.config, configError: this.configError, revealed: this.revealed,
@@ -579,7 +580,7 @@ export class Dashboard {
     const pending = this.data.pending ?? []
     this.summary.setContent(`${badge('apps', app.name, 'cyan')}   ${app.maintenance ? badge('warning', 'MAINTENANCE', 'warning') : badge('success', 'ACTIVE', 'success')}\n${badge('teams', app.team?.name ?? 'Personal / shared', 'muted')}  ·  ${badge('globe', app.region?.name, 'info')}  ·  ${badge('stack', app.stack?.name, 'muted')}\n${badge('resources', pending.includes('formation') ? 'Loading dynos…' : errors.formation ? 'Dynos unavailable' : `${formation.reduce((sum, f) => sum + f.quantity, 0)} configured dynos`, pending.includes('formation') ? 'info' : errors.formation ? 'warning' : 'fg')}  ·  ${badge('addons', pending.includes('addons') ? 'Loading add-ons…' : errors.addons ? 'Add-ons unavailable' : `${this.data.addons.length} add-ons`, pending.includes('addons') ? 'info' : errors.addons ? 'warning' : 'fg')}  ·  ${badge('refresh', this.refresh ? `refresh ${this.refresh}s` : 'manual refresh', 'muted')}`)
     if (this.cachedSnapshot) this.summary.setContent(`${this.summary.content}\n${badge('clock', `Cached snapshot · ${age(this.data.fetchedAt)} old`, 'warning')}`)
-    this.setRows(appRows(TABS[this.tab], this.data, {
+    this.setRows(appRows(tab, this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
       metrics: {snapshot: this.telemetry, error: this.metricsError, windowHours: this.metricsWindowHours},
@@ -654,7 +655,7 @@ export class Dashboard {
   }
 
   async loadResourceDetails({force = false} = {}) {
-    const kind = {Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]]
+    const kind = TAB_DEFINITIONS[this.tab].resourceKind
     if (!kind || !this.resources?.available || !this.data || this.closed) return
     if (pendingSections(TABS[this.tab], this.data).length) return
     if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.readRequests.has(`resources-${kind}`))) return
@@ -674,7 +675,7 @@ export class Dashboard {
         if (pause) { this.message = `${this.resourceErrors[kind]}${pause}`; this.messageTone = 'warning' }
       },
       onFinish: () => {
-        if ({Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]] === kind) {
+        if (TAB_DEFINITIONS[this.tab].resourceKind === kind) {
           // getScroll() includes Blessed's cursor offset; childBase is the
           // actual first visible line that should survive this redraw.
           const scroll = this.detail.childBase
@@ -1440,7 +1441,7 @@ export class Dashboard {
     const {signal} = request.controller
     let url
     if (app && !addon) {
-      const path = ['activity', 'resources', 'resources', 'settings', 'settings', 'activity', 'metrics'][tab]
+      const path = TAB_DEFINITIONS[tab].browserPath
       const processType = TABS[tab] === 'Metrics' ? row?.processType : null
       url = `https://dashboard.heroku.com/apps/${encodeURIComponent(app.name)}/${path}${processType ? `/${encodeURIComponent(processType)}` : ''}`
     } else if (this.pipeline) url = `https://dashboard.heroku.com/pipelines/${encodeURIComponent(this.pipeline.id)}`

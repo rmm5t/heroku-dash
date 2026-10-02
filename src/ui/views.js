@@ -1,11 +1,12 @@
 import {clean, single} from './text.js'
 import {stateStyle} from './theme.js'
 import {addonDetails, dynoDetails} from './resource-details.js'
-import {TABLE_COLUMNS} from './columns.js'
+import {pendingSections, tabDefinition} from './tabs.js'
 import {telemetryRows} from './telemetry.js'
 import {recentReleases, RELEASE_LIMIT} from '../releases.js'
 
 export {ansi, clean, single} from './text.js'
+export {pendingSections, TABS} from './tabs.js'
 export function age(date, now = Date.now()) {
   const seconds = Math.max(0, Math.floor((now - Date.parse(date)) / 1000))
   if (!Number.isFinite(seconds)) return '—'
@@ -16,17 +17,7 @@ export function age(date, now = Date.now()) {
 }
 const lines = entries => entries.map(([key, value]) => `${key.padEnd(17)} ${clean(value)}`).join('\n')
 const row = (label, detail, extra = {}) => ({label: single(label), detail: clean(detail), ...extra})
-export const TABS = ['Overview', 'Resources', 'Add-ons', 'Config', 'Settings', 'Releases', 'Metrics']
 export const STAGES = ['development', 'review', 'staging', 'production']
-
-export function pendingSections(tab, data) {
-  const required = {
-    Overview: ['app', 'formation', 'addons'], Resources: ['app', 'formation', 'dynos'],
-    'Add-ons': ['app', 'addons', 'attachments'], Config: [],
-    Settings: ['app', 'domains', 'buildpacks'], Releases: ['app', 'releases'], Metrics: ['app', 'formation', 'dynos'],
-  }
-  return (required[tab] ?? []).filter(section => data.pending?.includes(section))
-}
 
 export function sortApps(apps) {
   return [...apps].sort((a, b) => (STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage)) || a.name.localeCompare(b.name))
@@ -49,7 +40,7 @@ export function appRows(tab, data, {config, configError, revealed = new Set(), r
   const {app, formation, dynos, addons, attachments, domains, buildpacks, errors} = data
   const releases = recentReleases(data.releases)
   const rows = []
-  const noticeColumns = (label, status) => TABLE_COLUMNS[tab]?.map((column, index) => index === 0 ? label : /State|Status/.test(column.label) ? status : '—')
+  const noticeColumns = (label, status) => tabDefinition(tab)?.columns?.map((column, index) => index === 0 ? label : /State|Status/.test(column.label) ? status : '—')
   const error = section => {
     if (errors[section]) rows.push(row(`${section} unavailable`, errors[section], {
       icon: 'error', tone: 'error', emphasis: 'Unavailable',
