@@ -13,7 +13,7 @@ export const TAB_DEFINITIONS = [
     name: 'Resources', icon: 'resources', requiredSections: ['app', 'formation', 'dynos'], resourceKind: 'dynos', browserPath: 'resources',
     columns: [
       {label: 'Process / Dyno', min: 14, weight: 1, max: 26},
-      {label: 'Size', min: 12, weight: 2},
+      {label: 'Size', min: 12, weight: 4},
       {label: 'Qty', width: 4, right: true},
       {label: 'State / Action', width: 14},
       {label: 'Age', width: 9, hideBelow: 72},

@@ -137,7 +137,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | View | What you can do |
 | --- | --- |
 | **1 Overview** | Inspect app identity, team, region, stack, URLs, formation, and latest release version, description, and age |
-| **2 Resources** | Inspect process commands, desired quantity, dyno size, individual dyno states and ages; scale or stop processes and restart processes or dynos; optionally view costs and CPU/RAM allocations |
+| **2 Resources** | Inspect process commands, desired quantity, and dyno size names; inspect individual dyno sizes with RAM and vCPU specifications, states, and ages; scale or stop processes and restart processes or dynos; optionally view costs and total CPU/RAM allocations |
 | **3 Add-ons** | Inspect services, plans, provisioning state, billing app, and local/shared attachments; optionally view billed costs and capacity limits |
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |

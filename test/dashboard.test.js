@@ -3186,7 +3186,7 @@ test('scaling edits quantity with readline and selects an available dyno size wi
   assert.match(d.modal.children.map(child => child.content).join('\n'), /3 × standard-2x/)
   await key('constellation-staging')
   await key('\r')
-  assert.equal(sizeReads, 1)
+  assert.equal(sizeReads, 3) // Resources, scaling choices, and the post-mutation refresh.
   assert.deepEqual(writes, [['constellation-staging', 'web', 3, 'standard-2x', 'constellation-staging']])
 })
 
@@ -3506,6 +3506,85 @@ test('styled config rows preserve literal tags and reject remote terminal escape
   assert.ok(!d.main.items[0].content.includes('\x1b[2J'))
   await key('v')
   assert.ok(!visible().includes('literal'))
+})
+
+test('Resources loads dyno specifications lazily without the cost plugin and preserves focus and selection', async t => {
+  const {dashboard: d, screen, key} = await harness(t, {resources: null})
+  const pending = Promise.withResolvers()
+  let reads = 0
+  d.api.appDynoSizes = (_app, {signal}) => {
+    reads++
+    assert.equal(signal.aborted, false)
+    return pending.promise
+  }
+  await key('\r')
+  assert.equal(reads, 0)
+  await key('2')
+  assert.equal(reads, 1)
+  const selected = d.rows.findIndex(row => row.id === 'dyno:web.1')
+  d.main.select(selected)
+  d.detail.focus()
+  assert.equal(d.rows[selected].columns[1], 'Standard-1X')
+  await d.loadResourceDetails()
+  assert.equal(reads, 1)
+  pending.resolve([{name: 'Standard-1X', memory: 0.5, compute: 1, dedicated: false}])
+  await delay(0)
+  assert.equal(d.rows[selected].columns[1], 'Standard-1X · 0.5 GB RAM · 1 vCPU (shared)')
+  assert.match(clean(d.main.items[selected].content), /0\.5 GB RAM · 1 vCPU/)
+  assert.match(clean(d.detail.content), /0\.5 GB RAM · 1 vCPU \(shared\)/)
+  assert.equal(d.main.selected, selected)
+  assert.equal(screen.focused, d.detail)
+  await key('1')
+  await key('2')
+  assert.equal(reads, 1)
+})
+
+test('failed dyno specifications retain plain size names and retry on refresh', async t => {
+  const {dashboard: d, key} = await harness(t, {resources: null})
+  let reads = 0
+  d.api.appDynoSizes = async () => {
+    if (++reads === 1) throw new Error('Catalog unavailable')
+    return [{name: 'Standard-1X', memory: 0.5}]
+  }
+  await key('\r')
+  await key('2')
+  assert.equal(d.rows[0].columns[1], 'Standard-1X')
+  assert.equal(d.resourceErrors.sizes, 'Catalog unavailable')
+  await key('1')
+  await key('2')
+  assert.equal(reads, 1)
+  await key('R')
+  assert.equal(reads, 2)
+  assert.equal(d.rows[0].columns[1], 'Standard-1X')
+  assert.equal(d.rows.find(row => row.id === 'dyno:web.1').columns[1], 'Standard-1X · 0.5 GB RAM')
+  assert.equal(d.resourceErrors.sizes, undefined)
+})
+
+test('dyno specification reads cancel on app navigation and shutdown without stale results', async t => {
+  const {dashboard: d, key} = await harness(t, {resources: null})
+  const pending = Promise.withResolvers()
+  let signal
+  d.api.appDynoSizes = (_app, options) => { signal = options.signal; return pending.promise }
+  await key('\r')
+  await key('2')
+  const oldSignal = signal
+  d.api.appDynoSizes = async () => [{name: 'Standard-1X', memory: 1}]
+  await d.openApp(d.catalog.apps[1])
+  await delay(0)
+  assert.equal(oldSignal.aborted, true)
+  pending.resolve([{name: 'Standard-1X', memory: 99}])
+  await delay(0)
+  assert.equal(d.rows[0].columns[1], 'Standard-1X')
+  assert.equal(d.rows.find(row => row.id === 'dyno:web.1').columns[1], 'Standard-1X · 1 GB RAM')
+  const closing = Promise.withResolvers()
+  d.api.appDynoSizes = (_app, options) => { signal = options.signal; return closing.promise }
+  const loading = d.loadDynoSizes({force: true})
+  d.close()
+  assert.equal(signal.aborted, true)
+  closing.reject(new Error('Late catalog failure'))
+  await loading
+  assert.equal(d.resourceErrors.sizes, undefined)
+  assert.equal(d.loading.size, 0)
 })
 
 test('loading scanner advances and reverses without disturbing selection or scrolling', async t => {

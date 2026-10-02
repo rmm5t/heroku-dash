@@ -1,6 +1,7 @@
 import {clean, single} from './text.js'
 import {stateStyle} from './theme.js'
 import {addonDetails, dynoDetails} from './resource-details.js'
+import {dynoSizeLabel} from './dyno-size.js'
 import {pendingSections, tabDefinition} from './tabs.js'
 import {telemetryRows} from './telemetry.js'
 import {recentReleases, RELEASE_LIMIT} from '../releases.js'
@@ -76,8 +77,10 @@ function overviewRows(data) {
   return rows
 }
 
-function resourceRows(data, {resources}) {
+function resourceRows(data, {resources, dynoSizes}) {
   const {formation, dynos, errors} = data
+  const sizes = new Map((dynoSizes ?? []).map(size => [size.name.toLowerCase(), size]))
+  const sizeLabel = name => dynoSizeLabel({...sizes.get(name?.toLowerCase()), name})
   const rows = errorRows('Resources', errors, ['formation', 'dynos'])
   const byType = new Map()
   for (const dyno of dynos) {
@@ -89,11 +92,11 @@ function resourceRows(data, {resources}) {
     for (const [index, d] of sorted.entries()) {
       const treeBranch = index === sorted.length - 1 ? '└─' : '├─'
       const name = `  ${treeBranch} ${d.name}`
-      rows.push(row(`${name}  ${d.state}  ${d.size}  ·  ${age(d.created_at)}`, lines([
-        ['Dyno', d.name], ['Process', d.type], ['State', d.state], ['Size', d.size], ['Release', d.release ? `v${d.release.version}` : '—'],
+      rows.push(row(`${name}  ${d.state}  ${sizeLabel(d.size)}  ·  ${age(d.created_at)}`, lines([
+        ['Dyno', d.name], ['Process', d.type], ['State', d.state], ['Size', sizeLabel(d.size)], ['Release', d.release ? `v${d.release.version}` : '—'],
         ['Age', age(d.created_at)], ['Created', d.created_at], ['Command', d.command], ['Actions', '[r] restart'],
       ]) + dynoDetails(resources, 'instances', d.name), {id: `dyno:${d.name}`, kind: 'dyno', value: d, treeBranch, ...stateStyle(d.state), emphasis: d.state,
-        columns: [name, d.size, '—', `${d.state} [r]`, age(d.created_at)]}))
+        columns: [name, sizeLabel(d.size), '—', `${d.state} [r]`, age(d.created_at)]}))
     }
   }
   const appendProcess = f => {
@@ -241,10 +244,10 @@ const rowBuilders = new Map([
   ['Config', configRows], ['Settings', settingsRows], ['Releases', releaseRows], ['Metrics', metricsRows],
 ])
 
-export function appRows(tab, data, {config, configError, revealed = new Set(), resources, metrics} = {}) {
+export function appRows(tab, data, {config, configError, revealed = new Set(), resources, dynoSizes, metrics} = {}) {
   const pending = pendingSections(tab, data)
   if (pending.length) return [row(`Loading ${tab.toLowerCase()}…`, `Waiting for ${pending.join(', ')}.\n\nOther views remain available while these sections load.`, {icon: 'refresh', tone: 'info'})]
-  const rows = rowBuilders.get(tab)?.(data, {config, configError, revealed, resources, metrics}) ?? []
+  const rows = rowBuilders.get(tab)?.(data, {config, configError, revealed, resources, dynoSizes, metrics}) ?? []
   const result = rows.length ? rows : [row('No items', `No ${tab.toLowerCase()} to display.`, {icon: 'search', tone: 'muted', columns: noticeColumns(tab, 'No items', 'Empty')})]
   for (const item of result) if (item.columns) item.columnLayout = tab
   return result

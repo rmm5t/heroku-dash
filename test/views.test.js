@@ -134,6 +134,33 @@ test('resource details distinguish process estimates, per-dyno rates, Eco, and u
   assert.ok(!instance.detail.includes('$0.00'))
 })
 
+test('Resources uses catalog specifications for each actual size without requiring the cost plugin', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  data.dynos[0].size = 'Performance-M'
+  data.dynos[1].size = 'Unknown'
+  data.dynos.push({...data.dynos[0], name: 'web.3', size: 'Standard-1X'})
+  const dynoSizes = [
+    {name: 'standard-1x', memory: 0.5, compute: 1, dedicated: false},
+    {name: 'Standard-2X', memory: 1, compute: null},
+    {name: 'Performance-M', memory: 2.5, compute: 2, dedicated: true},
+    {name: 'Unknown', memory: NaN, compute: Infinity},
+  ]
+  const rows = appRows('Resources', data, {dynoSizes, resources: {provider: {available: false}}})
+  const web = rows.find(row => row.id === 'formation:web')
+  assert.equal(web.columns[1], 'Standard-1X')
+  assert.match(web.detail, /Size\s+Standard-1X\n/)
+  assert.equal(web.value.size, 'Standard-1X')
+  const deploying = rows.find(row => row.id === 'dyno:web.1')
+  assert.equal(deploying.columns[1], 'Performance-M · 2.5 GB RAM · 2 vCPUs (dedicated)')
+  assert.match(deploying.detail, /Size\s+Performance-M · 2.5 GB RAM · 2 vCPUs \(dedicated\)/)
+  assert.equal(rows.find(row => row.id === 'dyno:web.2').columns[1], 'Unknown')
+  assert.equal(rows.find(row => row.id === 'dyno:web.3').columns[1], 'Standard-1X · 0.5 GB RAM · 1 vCPU (shared)')
+  assert.equal(rows.find(row => row.id === 'dyno:worker.1').columns[1], 'Standard-2X · 1 GB RAM')
+  assert.equal(rows.find(row => row.id === 'formation:worker').columns[1], 'Standard-2X')
+  assert.equal(appRows('Resources', data).find(row => row.id === 'formation:web').columns[1], 'Standard-1X')
+})
+
 test('Resources renders idle dynos as stopped and muted', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)

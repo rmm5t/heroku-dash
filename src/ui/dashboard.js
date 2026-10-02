@@ -15,6 +15,7 @@ import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {createCommandViewer} from './command-viewer.js'
 import {createLogViewer} from './log-viewer.js'
+import {dynoSizeLabel} from './dyno-size.js'
 import {ModalLifecycle} from './modal-lifecycle.js'
 import {enableReadline} from './readline.js'
 import {runRead} from './read-operation.js'
@@ -585,6 +586,7 @@ export class Dashboard {
     this.setRows(appRows(tab, this.data, {
       config: this.config, configError: this.configError, revealed: this.revealed,
       resources: {provider: this.resources, data: this.resourceData, errors: this.resourceErrors},
+      dynoSizes: this.resourceData.sizes,
       metrics: {snapshot: this.telemetry, error: this.metricsError, windowHours: this.metricsWindowHours},
     }), true)
     if (preserveScroll) { this.detail.setScroll(scroll); this.render() }
@@ -649,7 +651,7 @@ export class Dashboard {
   resetResourceDetails() {
     this.resourceData = {}
     this.resourceErrors = {}
-    for (const kind of ['dynos', 'addons']) {
+    for (const kind of ['dynos', 'addons', 'sizes']) {
       this.readRequests.cancel(`resources-${kind}`)
       this.loading.delete(`resources-${kind}`)
     }
@@ -658,8 +660,10 @@ export class Dashboard {
 
   async loadResourceDetails({force = false} = {}) {
     const kind = TAB_DEFINITIONS[this.tab].resourceKind
-    if (!kind || !this.resources?.available || !this.data || this.closed) return
+    if (!kind || !this.data || this.closed) return
     if (pendingSections(TABS[this.tab], this.data).length) return
+    if (kind === 'dynos') void this.loadDynoSizes({force})
+    if (!this.resources?.available) return
     if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.readRequests.has(`resources-${kind}`))) return
     const data = this.data
     await runRead(this, `resources-${kind}`, {
@@ -685,6 +689,31 @@ export class Dashboard {
           this.detail.setScroll(scroll)
           this.render()
         }
+      },
+    })
+  }
+
+  async loadDynoSizes({force = false} = {}) {
+    if (!this.data || this.closed) return
+    if (this.readRequests.has('resources-sizes')) return
+    if (!force && (this.resourceData.sizes || this.resourceErrors.sizes)) return
+    const data = this.data
+    await runRead(this, 'resources-sizes', {
+      label: 'Loading dyno size specifications…',
+      isCurrent: () => this.data?.app.id === data.app.id,
+      read: ({signal}) => this.api.appDynoSizes(data.app, {signal}),
+      onSuccess: sizes => {
+        this.resourceData.sizes = sizes
+        delete this.resourceErrors.sizes
+        this.recordRefreshResult('resources-sizes', [])
+      },
+      onError: error => {
+        this.resourceErrors.sizes = errorMessage(error)
+        const pause = this.recordRefreshResult('resources-sizes', [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
+        if (pause) { this.message = `${this.resourceErrors.sizes}${pause}`; this.messageTone = 'warning' }
+      },
+      onFinish: () => {
+        if (TABS[this.tab] === 'Resources') this.drawApp({preserveScroll: true})
       },
     })
   }
@@ -1142,15 +1171,7 @@ export class Dashboard {
     if (!result || !current()) return
     const sizes = result.value
     const size = await this.choose('Scale dynos · size', `${app.name} / ${formation.type}\nCurrent: ${formation.size} · Requested quantity: ${quantity}\nChoose a dyno size (Basic supports at most 1 dyno).`,
-      sizes.map(item => {
-        const specs = [item.name]
-        if (Number.isFinite(item.memory)) specs.push(`${item.memory} GB RAM`)
-        if (Number.isFinite(item.compute)) {
-          const sharing = item.dedicated === true ? ' (dedicated)' : item.dedicated === false ? ' (shared)' : ''
-          specs.push(`${item.compute} vCPU${item.compute === 1 ? '' : 's'}${sharing}`)
-        }
-        return {label: specs.join(' · '), value: item.name}
-      }),
+      sizes.map(item => ({label: dynoSizeLabel(item), value: item.name})),
       sizes.findIndex(item => item.name.toLowerCase() === formation.size.toLowerCase()))
     if (size === null || !current()) return
     const confirmation = await this.confirm(app, `Scale ${formation.type}: ${formation.quantity} × ${formation.size} → ${quantity} × ${size}.\nThis can restart dynos and change billing.`)
