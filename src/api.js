@@ -3,6 +3,7 @@ import {isIP} from 'node:net'
 import {domainToASCII} from 'node:url'
 import {withAbort} from './read-requests.js'
 import {recentReleases, RELEASE_LIMIT} from './releases.js'
+import {validateConfigKey, validateDynoQuantity, validateDynoSize} from './validation.js'
 
 const V3 = 'application/vnd.heroku+json; version=3'
 const encode = encodeURIComponent
@@ -29,8 +30,10 @@ export function normalizeHostname(value) {
 function configCloneValues(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Config vars must be a key/value object.')
   const entries = Object.entries(config).filter(([key]) => !key.startsWith('HEROKU_'))
-  if (entries.some(([key, value]) => !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) || typeof value !== 'string')) {
-    throw new Error('Source config vars must have valid keys and string values.')
+  const message = 'Source config vars must have valid keys and string values.'
+  for (const [key, value] of entries) {
+    validateConfigKey(key, message)
+    if (typeof value !== 'string') throw new Error(message)
   }
   return Object.fromEntries(entries)
 }
@@ -317,8 +320,8 @@ export class HerokuAPI {
 
   async scale(app, type, quantity, size, confirmation) {
     this.confirm(app, confirmation)
-    if (!Number.isSafeInteger(quantity) || quantity < 0) throw new Error('Dyno quantity must be a non-negative integer.')
-    if (!size?.trim()) throw new Error('Enter a dyno size, such as Standard-1X.')
+    validateDynoQuantity(quantity)
+    validateDynoSize(size)
     return this.get(`/apps/${encode(app)}/formation/${encode(type)}`, {method: 'PATCH', body: {quantity, size: size.trim()}})
   }
 
@@ -338,7 +341,7 @@ export class HerokuAPI {
 
   async setConfig(app, key, value, confirmation) {
     this.confirm(app, confirmation)
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) throw new Error('Config keys must start with a letter or underscore and contain only letters, digits, and underscores.')
+    validateConfigKey(key)
     if (value !== null && typeof value !== 'string') throw new Error('Config values must be strings.')
     return this.get(`/apps/${encode(app)}/config-vars`, {method: 'PATCH', body: {[key]: value}})
   }

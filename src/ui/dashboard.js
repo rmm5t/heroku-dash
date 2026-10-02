@@ -9,6 +9,7 @@ import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
 import {autoRefreshSections, RefreshBackoff} from '../refresh-policy.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
+import {parseDynoQuantity, validateConfigKey, validateDynoSize} from '../validation.js'
 import {age, appRows, clean, single, sortApps, STAGES} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
@@ -1122,12 +1123,15 @@ export class Dashboard {
     const formation = row.value
     const quantity = await this.prompt('Scale dynos · quantity', `${app.name} / ${formation.type}\nCurrent: ${formation.quantity} × ${formation.size}\nEnter desired quantity (0 stops this process).`, String(formation.quantity))
     if (quantity === null) return
-    if (!/^\d+$/.test(quantity) || !Number.isSafeInteger(Number(quantity))) { this.setStatus('Quantity must be a non-negative integer.', 'warning'); return }
+    let numericQuantity
+    try { numericQuantity = parseDynoQuantity(quantity, 'Quantity must be a non-negative integer.') }
+    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
     const size = await this.prompt('Scale dynos · size', `${app.name} / ${formation.type}\nEnter a Heroku dyno size (for example Standard-1X).`, formation.size)
     if (size === null) return
-    if (!size.trim()) { this.setStatus('Dyno size cannot be blank.', 'warning'); return }
+    try { validateDynoSize(size, 'Dyno size cannot be blank.') }
+    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
     const confirmation = await this.confirm(app, `Scale ${formation.type}: ${formation.quantity} × ${formation.size} → ${quantity} × ${size.trim()}.\nThis can restart dynos and change billing.`)
-    if (confirmation) await this.mutate(() => this.api.scale(app.name, formation.type, Number(quantity), size, confirmation))
+    if (confirmation) await this.mutate(() => this.api.scale(app.name, formation.type, numericQuantity, size, confirmation))
   }
 
   async dynoAction(action) {
@@ -1254,7 +1258,8 @@ export class Dashboard {
     let key = this.rows[this.main.selected]?.key
     if (isNew) key = await this.prompt('New config variable', `${app.name}\nEnter the variable name.`)
     if (!key) return
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) { this.setStatus('Invalid config variable name.', 'warning'); return }
+    try { validateConfigKey(key, 'Invalid config variable name.') }
+    catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
     const value = await this.prompt('Config variable · value', `${app.name} / ${key}\nEnter a new single-line value (input is masked; blank is an empty string).`, '', {secret: true})
     if (value === null) return
     const confirmation = await this.confirm(app, `${Object.hasOwn(this.config, key) ? 'Replace' : 'Create'} config variable ${key}.\nThis creates a release and restarts the app.`)

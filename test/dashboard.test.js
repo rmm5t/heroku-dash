@@ -3048,6 +3048,53 @@ test('scale cancellation and mismatched confirmation never call the API', async 
   assert.match(d.message, /did not match/)
 })
 
+test('invalid scaling input stops before confirmation and retains action-specific messages', async t => {
+  const {dashboard: d} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  await d.openApp(d.catalog.apps[0])
+  d.changeTab(1)
+  d.api.scale = () => assert.fail('Invalid scaling input must not write')
+  d.confirm = () => assert.fail('Invalid scaling input must not reach confirmation')
+  const cases = [
+    ...['', ' ', ' 2 ', '+2', '-0', '-1', '1.5', '1e2', '0x2', '9007199254740992'].map(quantity => ({
+      inputs: [quantity], message: 'Quantity must be a non-negative integer.',
+    })),
+    ...['', ' \t '].map(size => ({inputs: ['2', size], message: 'Dyno size cannot be blank.'})),
+  ]
+  for (const {inputs, message} of cases) {
+    const responses = [...inputs]
+    d.prompt = async () => {
+      assert.ok(responses.length, 'Invalid input must stop subsequent prompts')
+      return responses.shift()
+    }
+    await d.scale()
+    assert.equal(responses.length, 0)
+    assert.equal(d.message, message)
+    assert.equal(d.messageTone, 'warning')
+    assert.ok(!d.modal)
+  }
+})
+
+test('scaling parses decimal prompt input while preserving its confirmed display and size', async t => {
+  const {dashboard: d} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  await d.openApp(d.catalog.apps[0])
+  d.changeTab(1)
+  const writes = []
+  d.api.scale = async (...args) => { writes.push(args) }
+  for (const [entered, expected] of [['000', 0], ['002', 2], ['9007199254740991', Number.MAX_SAFE_INTEGER]]) {
+    const responses = [entered, ' Standard-2X ']
+    d.prompt = async () => responses.shift()
+    d.confirm = async (app, description) => {
+      assert.ok(description.includes(`→ ${entered} × Standard-2X.`))
+      return app.name
+    }
+    await d.scale()
+    assert.deepEqual(writes.at(-1), [d.app.name, 'web', expected, ' Standard-2X ', d.app.name])
+    assert.equal(responses.length, 0)
+  }
+})
+
 test('scaling prompts edit pre-filled inputs with readline and send exact values to the API', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
@@ -3083,6 +3130,25 @@ test('slow app response cannot overwrite a newer selection', async t => {
   await first
   assert.equal(d.app.name, 'constellation-production')
   assert.equal(d.data.app.name, 'constellation-production')
+})
+
+test('invalid config keys stop before the value prompt with the config-specific message', async t => {
+  const {dashboard: d} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  await d.openApp(d.catalog.apps[0])
+  d.changeTab(3)
+  await d.loadConfig()
+  d.api.setConfig = () => assert.fail('Invalid config keys must not write')
+  d.confirm = () => assert.fail('Invalid config keys must not reach confirmation')
+  for (const key of ['BAD-KEY', '1KEY', ' KEY', 'KEY ', 'KEY.VALUE', '密']) {
+    let prompts = 0
+    d.prompt = async () => { assert.equal(++prompts, 1, 'Invalid keys must not prompt for values'); return key }
+    await d.editConfig(true)
+    assert.equal(prompts, 1)
+    assert.equal(d.message, 'Invalid config variable name.')
+    assert.equal(d.messageTone, 'warning')
+    assert.ok(!d.modal)
+  }
 })
 
 test('config name and masked value prompts support readline editing and require app-name confirmation', async t => {

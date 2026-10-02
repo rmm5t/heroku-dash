@@ -442,8 +442,10 @@ test('mutations validate confirmation, quantity, size, and config names', async 
   const api = new HerokuAPI({request() { assert.fail('Invalid action reached network') }})
   await assert.rejects(api.scale('production', 'web', 2, 'Standard-1X', 'staging'), /exact app name/)
   await assert.rejects(api.stop('production', 'web', 'process', 'staging'), /exact app name/)
-  for (const quantity of [-1, 1.5, NaN, Infinity, '2']) await assert.rejects(api.scale('app', 'web', quantity, 'Standard-1X', 'app'), /non-negative integer/)
-  await assert.rejects(api.scale('app', 'web', 1, '', 'app'), /dyno size/)
+  for (const quantity of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '2', null, undefined, true]) {
+    await assert.rejects(api.scale('app', 'web', quantity, 'Standard-1X', 'app'), /non-negative integer/)
+  }
+  for (const size of ['', ' \t ', null, undefined]) await assert.rejects(api.scale('app', 'web', 1, size, 'app'), /dyno size/)
   await assert.rejects(api.stop('app', '', 'process', 'app'), /Select a process or dyno/)
   await assert.rejects(api.stop('app', 'web', 'app', 'app'), /scope/)
   await assert.rejects(api.dynoAction('app', 'web', 'process', 'delete', 'app'), /must be stop or restart/)
@@ -454,7 +456,7 @@ test('mutations validate confirmation, quantity, size, and config names', async 
 test('confirmed mutations target exactly the app and process requested', async () => {
   const calls = []
   const api = new HerokuAPI({async request(path, options) { calls.push({path, ...options}); return {body: {}} }})
-  await api.scale('staging', 'web', 0, 'Standard-1X', 'staging')
+  await api.scale('staging', 'web', 0, ' Standard-1X ', 'staging')
   await api.stop('staging', 'web', 'process', 'staging')
   await api.restart('staging', 'worker', 'process', 'staging')
   await api.stop('staging', 'web.1', 'dyno', 'staging')
