@@ -61,9 +61,17 @@ function overviewRows(data) {
     ['Process', f.type], ['Quantity', f.quantity], ['Size', f.size], ['Command', f.command],
     ['Action', 'Press s to change quantity / size. Scaling may change billing.'],
   ]), {id: `overview:formation:${f.type}`, kind: 'formation', value: f, icon: 'resources', tone: f.quantity ? 'cyan' : 'muted', columns: [f.type, f.size, f.quantity, '[s] scale']}))
-  if (releases[0]) rows.push(row(`Latest release: v${releases[0].version}  ·  ${releases[0].status}`, releases[0].description, {
-    ...stateStyle(releases[0].status), emphasis: releases[0].status, columns: ['Latest release', `v${releases[0].version}`, '—', releases[0].status],
-  }))
+  const release = releases[0]
+  if (release) {
+    const releaseAge = age(release.created_at)
+    const summary = `v${release.version} · ${releaseAge === '—' ? '—' : `${releaseAge} ago`} · ${single(release.description)}`
+    rows.push(row(`Latest release: ${summary}  ·  ${release.status}`, lines([
+      ['Version', `v${release.version}`], ['Status', release.status], ['Description', release.description],
+      ['Age', releaseAge], ['Created', release.created_at],
+    ]), {
+      ...stateStyle(release.status), emphasis: release.status, columns: ['Latest release', summary, '—', release.status],
+    }))
+  }
   rows.push(...errorRows('Overview', errors, Object.keys(errors)))
   return rows
 }

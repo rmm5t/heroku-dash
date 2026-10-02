@@ -36,16 +36,24 @@ test('all views render demo data and errors without exposing config inadvertentl
   assert.match(JSON.stringify(appRows('Metrics', data)), /unavailable/)
 })
 
-test('Releases, Overview, and Metrics use only the newest 20 releases from oversized snapshots', async () => {
+test('Releases, Overview, and Metrics use only the newest 20 releases from oversized snapshots', async t => {
+  t.mock.timers.enable({apis: ['Date'], now: Date.parse('2026-10-02T12:00:00Z')})
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)
   data.releases = Array.from({length: 350}, (_, index) => ({...data.releases[0],
-    version: index + 1, status: index < 330 ? 'failed' : 'succeeded'}))
+    version: index + 1, status: index < 330 ? 'failed' : 'succeeded', description: `Deploy commit${index + 1}`,
+    created_at: new Date(Date.now() - (350 - index) * 3600_000).toISOString()}))
   const rows = appRows('Releases', data)
   assert.equal(rows.length, 20)
   assert.equal(rows[0].columns[0], 'v350')
   assert.equal(rows.at(-1).columns[0], 'v331')
-  assert.ok(appRows('Overview', data).some(row => row.label.startsWith('Latest release: v350')))
+  const latest = appRows('Overview', data).find(row => row.columns[0] === 'Latest release')
+  assert.match(latest.label, /^Latest release: v350 · 1h 0m ago · Deploy commit350/)
+  assert.match(latest.columns[1], /v350 · 1h 0m ago · Deploy commit350/)
+  assert.equal(latest.columns[3], 'succeeded')
+  assert.match(latest.detail, /Description\s+Deploy commit350/)
+  assert.match(latest.detail, /Age\s+1h 0m/)
+  assert.match(latest.detail, /Created\s+2026-10-02T11:00:00.000Z/)
   const metrics = appRows('Metrics', data).find(row => row.id === 'releases')
   assert.match(metrics.detail, /Latest 20 releases \(up to 20\)/)
   assert.match(metrics.detail, /0 failed releases/)
