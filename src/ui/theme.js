@@ -86,6 +86,38 @@ export function highlightKeys(value, tone, bold = false) {
   return content + surrounding(text.slice(offset))
 }
 
+export function stylePaneFocus(pane) {
+  const focused = () => pane.screen.focused === pane
+  const {fg} = pane._label.style
+  pane._label.style.fg = () => focused() ? palette.accent : fg
+  // Blessed draws single-line borders; replace only the focused pane's border
+  // cells before later widgets render, so dialogs can still cover the pane.
+  const doubleBorder = {'┌': '╔', '┐': '╗', '└': '╚', '┘': '╝', '─': '═', '│': '║'}
+  pane.on('render', ({xi, xl, yi, yl}) => {
+    if (!focused()) return
+    const attr = pane.sattr(pane.style.border)
+    const label = pane._label.lpos
+    const replace = (x, y) => {
+      if (label && x >= label.xi && x < label.xl && y >= label.yi && y < label.yl) return
+      const line = pane.screen.lines[y]
+      const cell = line?.[x]
+      const character = cell && doubleBorder[cell[1]]
+      if (character && cell[0] === attr) {
+        cell[1] = character
+        line.dirty = true
+      }
+    }
+    for (let x = xi; x < xl; x++) {
+      replace(x, yi)
+      replace(x, yl - 1)
+    }
+    for (let y = yi + 1; y < yl - 1; y++) {
+      replace(xi, y)
+      replace(xl - 1, y)
+    }
+  })
+}
+
 export function styleListSelection(list) {
   const focused = () => list.screen.focused === list
   Object.assign(list.style.selected, {

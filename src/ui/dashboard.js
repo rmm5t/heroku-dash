@@ -19,7 +19,7 @@ import {ModalLifecycle} from './modal-lifecycle.js'
 import {enableReadline} from './readline.js'
 import {runRead} from './read-operation.js'
 import {pendingSections, TAB_DEFINITIONS, TABS} from './tabs.js'
-import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection} from './theme.js'
+import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, stylePaneFocus} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 import {bindMovementKeys, frame} from './widget-helpers.js'
 
@@ -110,6 +110,7 @@ export class Dashboard {
     })
     this.detail = blessed.box({parent, top: '40%+7', bottom: 4, left: SIDEBAR_WIDTH, right: 0, ...frame(), label: ` ${icons.overview}  Details `, padding: {left: 1, right: 1}, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true, tags: false,
       scrollbar: {ch: '│', style: {bg: palette.border}}})
+    for (const pane of [this.nav, this.main, this.detail]) stylePaneFocus(pane)
     this.status = blessed.box({parent, bottom: 2, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.muted, bg: palette.bg}})
     this.footer = blessed.box({parent, bottom: 0, height: 2, left: 0, right: 0, padding: {left: 1}, tags: false, style: {fg: palette.fg, bg: palette.panel}})
     this.small = blessed.box({parent, top: 0, left: 0, right: 0, bottom: 0, hidden: true, style: {fg: palette.fg, bg: palette.bg}, valign: 'middle', align: 'center', content: highlightKeys('heroku dash\n\nPlease resize your terminal to at least 80 × 24.\n\nq / Ctrl-C to quit')})

@@ -1332,9 +1332,33 @@ test('tab clicks are inactive in the workspace, during prompts, and below the mi
   assert.equal(d.tab, 3)
 })
 
-for (const theme of ['dark', 'light']) test(`${theme} selection highlights follow keyboard and mouse focus with one purple marker`, async t => {
+for (const theme of ['dark', 'light']) test(`${theme} pane titles, double borders, and selection highlights follow keyboard and mouse focus`, async t => {
   const {dashboard: d, screen, key, click} = await harness(t, {theme})
   const assertSelections = focused => {
+    for (const pane of [d.nav, d.main, d.detail]) {
+      const active = screen.focused === pane
+      const {xi, xl, yi, yl} = pane.lpos
+      const [borderAttr, border] = screen.lines[yi][xi + 1]
+      assert.equal((borderAttr >> 9) & 0x1ff, blessed.colors.convert(active ? palette.accent : palette.border))
+      assert.equal(Boolean(borderAttr & (1 << 18)), false)
+      assert.equal(border, active ? '═' : '─')
+      for (const [x, y, single, double] of [
+        [xi, yi, '┌', '╔'], [xl - 1, yi, '┐', '╗'],
+        [xi, yl - 1, '└', '╚'], [xl - 1, yl - 1, '┘', '╝'],
+        [xi, yi + 1, '│', '║'], [xl - 1, yi + 1, '│', '║'],
+        [xi + 1, yl - 1, '─', '═'],
+      ]) {
+        const character = screen.lines[y][x][1]
+        if (screen.dockBorders && !active) assert.match(character, /^[┌┐└┘─│├┤┬┴┼]$/)
+        else assert.equal(character, active ? double : single)
+      }
+      assert.ok(!pane._label.content.includes('▶'))
+      const label = pane._label.lpos
+      const [titleAttr] = screen.lines[label.yi][label.xi + 1]
+      assert.equal((titleAttr >> 9) & 0x1ff, blessed.colors.convert(active ? palette.accent : undefined))
+      assert.equal(titleAttr & 0x1ff, blessed.colors.convert(undefined))
+      assert.equal(Boolean(titleAttr & (1 << 18)), false)
+    }
     for (const list of [d.nav, d.main]) {
       const active = list === focused
       const {xi, yi} = list.items[list.selected].lpos
@@ -1363,6 +1387,26 @@ for (const theme of ['dark', 'light']) test(`${theme} selection highlights follo
   await click(xi, yi)
   assert.equal(d.app.id, app.id)
   assertSelections(d.main)
+  await key('\x1b[Z') // Shift-Tab returns focus to the sidebar.
+  assertSelections(d.nav)
+  screen.program.cols = 80
+  screen.program.emit('resize')
+  d.render()
+  assertSelections(d.nav)
+  screen.dockBorders = true // Match the real dashboard screen's border docking.
+  await key('\t')
+  assertSelections(d.main)
+  await key('\t')
+  assertSelections(null)
+  d.detail.setScrollPerc(100)
+  d.render()
+  assertSelections(null)
+  await key('/')
+  assert.ok(d.modal)
+  assert.ok(!screen.lines.flat().some(cell => /[╔╗╚╝═║]/u.test(cell[1])))
+  await key('\x1b')
+  assert.equal(d.modal, null)
+  assertSelections(null)
 })
 
 for (const theme of ['dark', 'light']) test(`${theme} inline keybindings stay purple across panes, selections, and help`, async t => {

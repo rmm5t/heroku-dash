@@ -112,7 +112,7 @@ Switching apps keeps the selected tab, so moving from Metrics on one app opens M
 
 Navigating to another app or pipeline, replacing a pending read, or closing Dash cancels obsolete reads. Late results and errors cannot overwrite the active view or its status. Shared dyno-size lookups continue while another view still needs them.
 
-Navigation remains available while app data loads: switch tabs, move between panes, or open another app. Pending tabs show a loading state, and completed reads preserve your pane focus. Config loads independently as soon as you select it; app panes do not wait for team and pipeline breadcrumb lookups.
+Navigation remains available while app data loads: switch tabs, move between panes, or open another app. The active pane has a purple title and a double-line purple border; use Tab / Shift-Tab or click a pane to change focus. Pending tabs show a loading state, and completed reads preserve your pane focus. Config loads independently as soon as you select it; app panes do not wait for team and pipeline breadcrumb lookups.
 
 App sections load in parallel and panes render as soon as their required sections finish. A slow releases, domains, or buildpacks lookup does not hold up Resources or Add-ons. Pending data is shown as loading rather than empty or zero, and costs and performance metrics can start loading before the rest of the app snapshot completes. Refreshes retain the previous snapshot until the new one finishes.
 
