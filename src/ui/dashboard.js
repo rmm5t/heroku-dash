@@ -13,6 +13,7 @@ import {age, ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TA
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
 import {LogBuffer, LOG_LIMITS} from './log-buffer.js'
+import {enableReadline} from './readline.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 
@@ -36,123 +37,6 @@ function bindMovementKeys(widget) {
       widget.screen.render()
     })
   }
-}
-
-function enableReadline(input, history, render) {
-  let characters = [...input.getValue()]
-  let cursor = characters.length
-  let historyIndex = history.length
-  let draft = input.getValue()
-  let killed = ''
-  let viewStart = 0
-  const display = value => input.censor ? '*'.repeat([...value].length) : value.replaceAll('\t', input.screen.tabc)
-  const width = value => blessed.unicode.strWidth(display(value))
-  const updateCursor = () => {
-    if (input.screen.focused !== input) return
-    const position = input._getCoords()
-    if (!position) return
-    input.screen.program.cup(position.yi + input.itop,
-      position.xi + input.ileft + width(characters.slice(viewStart, cursor).join('')))
-  }
-  const refresh = () => {
-    const available = Math.max(1, input.width - input.iwidth - 1)
-    let used = 0
-    viewStart = cursor
-    const reserved = cursor < characters.length ? Math.min(available, width(characters[cursor])) : 0
-    while (viewStart > 0 && used + width(characters[viewStart - 1]) <= available - reserved) {
-      used += width(characters[--viewStart])
-    }
-    let viewEnd = cursor
-    while (viewEnd < characters.length && used + width(characters[viewEnd]) <= available) {
-      used += width(characters[viewEnd++])
-    }
-    const value = characters.join('')
-    input.value = value
-    input._value = value
-    input.setContent(display(characters.slice(viewStart, viewEnd).join('')))
-    render()
-    updateCursor()
-  }
-  const replace = value => {
-    characters = [...value]
-    cursor = characters.length
-    refresh()
-  }
-  const selectHistory = direction => {
-    if (!history.length) return
-    if (historyIndex === history.length) {
-      draft = characters.join('')
-      // A displayed newest entry is already selected; move straight past it.
-      if (direction < 0 && draft === history.at(-1)) historyIndex--
-    }
-    historyIndex = Math.max(0, Math.min(history.length, historyIndex + direction))
-    replace(historyIndex === history.length ? draft : history[historyIndex])
-  }
-  const previousWord = () => {
-    let index = cursor
-    while (index > 0 && /\s/.test(characters[index - 1])) index--
-    while (index > 0 && !/\s/.test(characters[index - 1])) index--
-    return index
-  }
-  const nextWord = () => {
-    let index = cursor
-    while (index < characters.length && /\s/.test(characters[index])) index++
-    while (index < characters.length && !/\s/.test(characters[index])) index++
-    return index
-  }
-  input.removeListener('resize', input.__updateCursor)
-  input.removeListener('move', input.__updateCursor)
-  input._updateCursor = updateCursor
-  input.__updateCursor = updateCursor
-  input.on('resize', updateCursor)
-  input.on('move', updateCursor)
-  input._listener = (ch, key) => {
-    if (key.name === 'enter' || key.name === 'return') { input._done(null, characters.join('')); return }
-    if (key.name === 'escape') { input._done(null, null); return }
-    if ((key.ctrl && key.name === 'a') || key.name === 'home') cursor = 0
-    else if ((key.ctrl && key.name === 'e') || key.name === 'end') cursor = characters.length
-    else if ((key.ctrl && key.name === 'b') || key.name === 'left') cursor = Math.max(0, cursor - 1)
-    else if ((key.ctrl && key.name === 'f') || key.name === 'right') cursor = Math.min(characters.length, cursor + 1)
-    else if (key.meta && key.name === 'b') cursor = previousWord()
-    else if (key.meta && key.name === 'f') cursor = nextWord()
-    else if ((key.ctrl && key.name === 'p') || key.name === 'up') { selectHistory(-1); return }
-    else if ((key.ctrl && key.name === 'n') || key.name === 'down') { selectHistory(1); return }
-    else if (key.ctrl && key.name === 't') {
-      if (cursor > 0 && characters.length > 1) {
-        const index = cursor === characters.length ? cursor - 2 : cursor - 1
-        const left = characters[index]
-        characters[index] = characters[index + 1]
-        characters[index + 1] = left
-        cursor = Math.min(characters.length, cursor + 1)
-      }
-    } else if (key.ctrl && key.name === 'u') {
-      killed = characters.splice(0, cursor).join('')
-      cursor = 0
-    } else if (key.ctrl && key.name === 'k') {
-      killed = characters.splice(cursor).join('')
-    } else if (key.ctrl && key.name === 'w') {
-      const index = previousWord()
-      killed = characters.splice(index, cursor - index).join('')
-      cursor = index
-    } else if (key.ctrl && key.name === 'y') {
-      const inserted = [...killed]
-      characters.splice(cursor, 0, ...inserted)
-      cursor += inserted.length
-    } else if ((key.ctrl && key.name === 'd') || key.name === 'delete') {
-      if (cursor < characters.length) characters.splice(cursor, 1)
-    } else if (key.meta && key.name === 'd') {
-      killed = characters.splice(cursor, nextWord() - cursor).join('')
-    } else if (key.name === 'backspace') {
-      if (cursor > 0) characters.splice(--cursor, 1)
-    } else if (ch && !/^[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]$/.test(ch)) {
-      // Blessed emits surrogate halves separately; combine them before indexing.
-      const prefix = characters.slice(0, cursor).join('') + ch
-      characters = [...prefix, ...characters.slice(cursor)]
-      cursor = [...prefix].length
-    }
-    refresh()
-  }
-  refresh()
 }
 
 export class Dashboard {
