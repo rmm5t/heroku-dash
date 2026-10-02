@@ -9,19 +9,20 @@ import {resolveHierarchy} from '../hierarchy.js'
 import {ReadRequests, withAbort} from '../read-requests.js'
 import {autoRefreshSections, RefreshBackoff} from '../refresh-policy.js'
 import {fetchTelemetry, METRICS_TIMEFRAMES, metricsScope, metricsTimeframe} from '../metrics.js'
-import {age, ansi, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
+import {age, appRows, clean, pendingSections, single, sortApps, STAGES, TABS} from './views.js'
 import {detailContent, domainValueAt, isValueClick} from './details.js'
 import {tableColumns} from './columns.js'
-import {LogBuffer, LOG_LIMITS} from './log-buffer.js'
+import {createCommandViewer} from './command-viewer.js'
+import {createLogViewer} from './log-viewer.js'
 import {ModalLifecycle} from './modal-lifecycle.js'
 import {enableReadline} from './readline.js'
 import {runRead} from './read-operation.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
+import {bindMovementKeys, frame} from './widget-helpers.js'
 
 const SIDEBAR_WIDTH = '22%'
 const VERSION = `v${packageJSON.version}`
-const frame = () => ({border: {type: 'line'}, style: {fg: palette.fg, bg: palette.bg, border: {fg: palette.border}, focus: {border: {fg: palette.accent}}}})
 const createScreen = input => blessed.screen({input, smartCSR: true, fullUnicode: true, title: 'heroku dash', dockBorders: true, autoPadding: true, sendFocus: true})
 const descriptionContent = (description, highlightFirstLine) => {
   const text = clean(description)
@@ -29,16 +30,6 @@ const descriptionContent = (description, highlightFirstLine) => {
   return highlightFirstLine
     ? `${highlightKeys(newline < 0 ? text : text.slice(0, newline), 'warning', true)}${newline < 0 ? '' : highlightKeys(text.slice(newline))}`
     : highlightKeys(text)
-}
-
-function bindMovementKeys(widget) {
-  for (const [key, direction] of [['C-n', 1], ['C-p', -1]]) {
-    widget.key([key], () => {
-      if (widget.type === 'list') widget.move(direction)
-      else widget.scroll(direction)
-      widget.screen.render()
-    })
-  }
 }
 
 export class Dashboard {
@@ -1401,52 +1392,14 @@ export class Dashboard {
 
   async commandPane(app, args, invocation) {
     this.invalidateAppSnapshot(app.id)
-    const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '90%', height: '85%', ...frame(),
-      label: ` ${icons.code}  Heroku CLI · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
-    let result = null
-    const lifecycle = new ModalLifecycle(this, modal, {onClose: ({restoreFocus}) => {
-      if (!restoreFocus) return
-      if (result) this.setStatus(result.code === 0 ? 'Heroku command completed.' : `Heroku command exited with ${result.signal ?? `code ${result.code}`}.`, result.code === 0 ? 'success' : 'warning')
-      else this.setStatus('Heroku command stopped.', 'warning')
-    }})
-    const output = blessed.box({parent: modal, top: 1, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true, keys: true, vi: true, mouse: true,
-      tags: false, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
-    bindMovementKeys(output)
-    const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
-      content: `${shortcut('Esc / q', 'close and stop')}   ${shortcut('j/k', 'scroll')}\n${paint('Running…', 'info')}`, style: {fg: palette.muted, bg: palette.bg}})
-    const controller = new AbortController()
-    const request = {controller, modal, close: options => lifecycle.close(options)}
-    this.commandRequest = request
-    lifecycle.addCleanup(() => {
-      if (this.commandRequest === request) this.commandRequest = null
-      controller.abort()
+    const viewer = createCommandViewer({owner: this, appName: app.name,
+      execute: (argv, options) => this.executeHeroku(argv, options), render: () => this.render(),
+      setStatus: (message, tone) => this.setStatus(message, tone),
+      isCurrent: () => this.commandRequest === viewer,
+      onClose: () => { if (this.commandRequest === viewer) this.commandRequest = null },
     })
-    let raw = `$ ${invocation}\n\n`
-    const draw = chunk => {
-      if (this.closed || this.commandRequest !== request) return
-      raw = `${raw}${chunk}`.slice(-200_000)
-      output.setContent(ansi(raw))
-      output.setScrollPerc(100)
-      this.render()
-    }
-    const close = () => lifecycle.close()
-    modal.key(['escape', 'q'], close)
-    output.key(['escape', 'q'], close)
-    output.focus()
-    draw('')
-    try {
-      result = await this.executeHeroku(args, {signal: controller.signal, onOutput: draw})
-      if (this.commandRequest !== request) return
-      const status = result.code === 0 ? 'Completed successfully.' : `Exited with ${result.signal ?? `code ${result.code}`}.`
-      footer.setContent(`${shortcut('Esc / q', 'close')}   ${shortcut('j/k', 'scroll')}\n${paint(status, result.code === 0 ? 'success' : 'warning')}`)
-      this.render()
-    } catch (error) {
-      if (this.commandRequest !== request) return
-      result = {code: null, signal: 'error'}
-      draw(`\n${errorMessage(error)}\n`)
-      footer.setContent(`${shortcut('Esc / q', 'close')}   ${shortcut('j/k', 'scroll')}\n${paint('Command failed to start.', 'error')}`)
-      this.render()
-    }
+    this.commandRequest = viewer
+    await viewer.run(args, invocation)
   }
 
   async openLogs() {
@@ -1454,120 +1407,20 @@ export class Dashboard {
     if (this.demo) { this.setStatus('Log streaming is disabled in the offline demo.', 'warning'); return }
     const app = this.app
     const generation = this.generation
-    const buffer = new LogBuffer()
-    const matchHighlight = `\x1b[48;5;${blessed.colors.convert(palette.logMatch)}m`
-    const matchForeground = `\x1b[38;5;${blessed.colors.convert(palette.logMatchFg)}m`
-    const controller = new AbortController()
-    const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '95%', height: '85%', ...frame(),
-      label: ` ${icons.code}  Logs · ${single(app.name)} `, style: {...frame().style, border: {fg: palette.accent}}})
-    const lifecycle = new ModalLifecycle(this, modal, {onClose: ({restoreFocus}) => {
-      if (restoreFocus) this.setStatus('Log viewer closed.')
-    }})
-    const heading = blessed.box({parent: modal, top: 0, left: 2, right: 2, height: 1, tags: false,
-      style: {fg: palette.muted, bg: palette.bg}})
-    const output = blessed.box({parent: modal, top: 2, bottom: 3, left: 2, right: 2, scrollable: true, alwaysScroll: true,
-      keys: true, vi: true, mouse: true, tags: false, scrollbar: {ch: '│', style: {bg: palette.border}}, style: {fg: palette.fg, bg: palette.bg}})
-    bindMovementKeys(output)
-    const footer = blessed.box({parent: modal, bottom: 0, height: 2, left: 2, right: 2, tags: false,
-      style: {fg: palette.muted, bg: palette.bg}})
-    const request = {controller, modal, output, close: options => lifecycle.close(options)}
-    this.logRequest = request
-    let input = null
-    let timer = null
-    let status = 'Connecting…'
-    let tone = 'info'
-    let finished = false
-    const current = () => !this.closed && this.logRequest === request && generation === this.generation && this.app?.id === app.id
-    const draw = ({resetScroll = false} = {}) => {
-      if (!current()) return
-      const scroll = output.childBase
-      heading.setContent(`Filter: ${buffer.filter ? single(buffer.filter) : '(none)'} · buffer ≤ ${LOG_LIMITS.lines} lines / ${LOG_LIMITS.characters / 1000}k characters`)
-      output.setContent(buffer.render(matchHighlight, matchForeground) || (buffer.filter ? 'No matching log lines.' : 'Waiting for log output…'))
-      if (buffer.paused) output.setScroll(resetScroll ? 0 : scroll)
-      else output.setScrollPerc(100)
-      footer.setContent(`${shortcut('p / Space', buffer.paused ? 'resume' : 'pause')}  ${shortcut('/', 'filter')}  ${shortcut('End', 'follow')}  ${shortcut('Esc / q', 'close')}\n${paint(`${buffer.paused ? 'Paused display' : 'Following'} · ${status}`, buffer.paused ? 'warning' : tone)}`)
-      this.render()
-    }
-    lifecycle.addCleanup(() => {
-      if (this.logRequest === request) this.logRequest = null
-      controller.abort()
-      clearTimeout(timer)
-      buffer.clear()
-      input?._done?.('stop')
-      input = null
+    const viewer = createLogViewer({owner: this, appName: app.name,
+      execute: (argv, options) => this.executeHeroku(argv, options), render: () => this.render(),
+      setStatus: (message, tone) => this.setStatus(message, tone),
+      isCurrent: () => this.logRequest === viewer && generation === this.generation && this.app?.id === app.id,
+      onClose: () => { if (this.logRequest === viewer) this.logRequest = null },
+      closeDashboard: () => this.close(), history: this.logFilterHistory,
+      historyScope: () => {
+        if (this.pipeline?.id) return `pipeline:${this.pipeline.id}`
+        if (!this.data || this.data.pending?.includes('coupling') || this.data.errors.coupling) return null
+        return `app:${app.id}`
+      },
     })
-    const pause = () => { buffer.pause(); draw() }
-    const resume = () => { buffer.resume(); draw() }
-    const historyScope = () => {
-      if (this.pipeline?.id) return `pipeline:${this.pipeline.id}`
-      if (!this.data || this.data.pending?.includes('coupling') || this.data.errors.coupling) return null
-      return `app:${app.id}`
-    }
-    const editFilter = () => {
-      if (input || !current()) return
-      output.top = 4
-      input = blessed.textbox({parent: modal, top: 1, left: 2, right: 2, height: 3, ...frame(), label: ' Filter logs · text or regex · ↑/↓ history ',
-        inputOnFocus: true, value: buffer.filter})
-      const editor = input
-      const finish = value => {
-        if (input !== editor || !current()) return
-        if (value !== null) {
-          buffer.filter = value
-          const scope = historyScope()
-          if (scope) void this.logFilterHistory.add(scope, value)
-        }
-        input = null
-        editor.destroy()
-        output.top = 2
-        output.focus()
-        draw({resetScroll: value !== null})
-      }
-      editor.on('submit', value => finish(value))
-      editor.on('cancel', () => finish(null))
-      editor.key(['C-c'], () => this.close())
-      enableReadline(editor, this.logFilterHistory.entries(historyScope()), () => this.render())
-      editor.focus()
-      this.render()
-    }
-    output.key(['p', 'space'], () => { if (buffer.paused) resume(); else pause() })
-    output.key(['end', 'G'], resume)
-    output.key(['k', 'up', 'pageup', 'C-p'], pause)
-    output.on('wheelup', pause)
-    output.key(['/'], editFilter)
-    modal.key(['escape', 'q'], () => { if (!input) request.close() })
-    output.key(['escape', 'q'], () => request.close())
-    output.focus()
-    draw()
-    try {
-      const result = await withAbort(this.executeHeroku(scopedHerokuCommand('logs --tail --num 100', app.name), {
-        signal: controller.signal,
-        onOutput: chunk => {
-          if (!current() || finished) return
-          buffer.append(chunk)
-          status = 'Streaming'
-          if (!buffer.paused && !timer) {
-            timer = setTimeout(() => { timer = null; draw() }, 100)
-            timer.unref()
-          }
-        },
-      }), controller.signal)
-      if (!current()) return
-      finished = true
-      status = result.code === 0 ? 'Stream ended. Close and press L to reconnect.' : `Stream exited with ${result.signal ?? `code ${result.code}`}.`
-      tone = result.code === 0 ? 'muted' : 'error'
-      clearTimeout(timer)
-      timer = null
-      draw()
-    } catch (error) {
-      if (!current()) return
-      finished = true
-      status = `Log stream failed: ${errorMessage(error)}`
-      tone = 'error'
-      buffer.append(`\n${errorMessage(error)}\n`)
-      clearTimeout(timer)
-      timer = null
-      draw()
-    }
+    this.logRequest = viewer
+    await viewer.run(scopedHerokuCommand('logs --tail --num 100', app.name))
   }
 
   async openBrowser() {
