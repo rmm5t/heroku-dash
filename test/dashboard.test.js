@@ -272,7 +272,7 @@ test('progressive snapshots start enrichment and metrics only when ready without
   await p.finish()
   assert.equal(resourceReads, 1)
   assert.equal(metricsReads, 1)
-  assert.ok(d.rows.some(row => row.id === 'releases'))
+  assert.ok(!d.rows.some(row => row.id === 'releases'))
 })
 
 test('navigating away from a progressive snapshot cancels pending sections and ignores late updates', async t => {
@@ -896,14 +896,11 @@ test('o in Metrics opens the selected process metrics, with app-wide rows using 
     ['telemetry:memory:worker', 'metrics/worker'],
     ['telemetry:load:web', 'metrics/web'],
     ['telemetry:load:worker', 'metrics/worker'],
-    ['health:web', 'metrics/web'],
-    ['health:worker', 'metrics/worker'],
     ['telemetry:throughput', 'metrics'],
     ['telemetry:latency:p50', 'metrics'],
     ['telemetry:latency:p95', 'metrics'],
     ['telemetry:latency:p99', 'metrics'],
     ['health', 'metrics'],
-    ['releases', 'metrics'],
     ['snapshot', 'metrics'],
   ]
   for (const [id, path] of cases) {

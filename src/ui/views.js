@@ -4,7 +4,7 @@ import {addonDetails, dynoDetails} from './resource-details.js'
 import {dynoSizeLabel} from './dyno-size.js'
 import {pendingSections, tabDefinition} from './tabs.js'
 import {telemetryRows} from './telemetry.js'
-import {recentReleases, RELEASE_LIMIT} from '../releases.js'
+import {recentReleases} from '../releases.js'
 
 export {ansi, clean, single} from './text.js'
 export {pendingSections, TABS} from './tabs.js'
@@ -209,10 +209,9 @@ function releaseRows(data) {
 }
 
 function metricsRows(data, {metrics}) {
-  const {formation, dynos, errors} = data
-  const releases = recentReleases(data.releases)
+  const {errors} = data
   const rows = telemetryRows(data, metrics)
-  rows.push(...errorRows('Metrics', errors, ['dynos', 'formation', 'releases']))
+  rows.push(...errorRows('Metrics', errors, ['dynos', 'formation']))
   const m = operationalMetrics(data)
   const available = !errors.dynos && !errors.formation
   rows.push(row(`Dyno health    ${available ? `${m.healthy} / ${m.desired} configured dynos up or idle` : 'unavailable'}`, available
@@ -220,20 +219,6 @@ function metricsRows(data, {metrics}) {
     : 'Dyno health cannot be computed because formation or dyno data is unavailable.',
   {id: 'health', icon: 'metrics', tone: !available ? 'muted' : m.crashed ? 'error' : m.healthy < m.desired ? 'warning' : 'success', emphasis: 'Dyno health',
     columns: ['Dyno health', available ? m.desired : '—', available ? m.healthy : '—', available ? 'Up / idle' : 'Unavailable']}))
-  for (const f of formation) {
-    const members = dynos.filter(d => d.type === f.type)
-    const running = members.filter(d => ['up', 'idle'].includes(d.state)).length
-    const crashed = members.some(d => d.state === 'crashed')
-    const status = errors.dynos ? 'Unavailable' : crashed ? 'Crashed' : running < f.quantity ? 'Below target' : !f.quantity && !running ? 'Scaled to 0' : 'Up / idle'
-    const detail = lines([['Process', f.type], ['Desired', f.quantity], ['Running', errors.dynos ? 'Unavailable' : running]])
-      + '\n\n' + (errors.dynos ? `Dyno data unavailable: ${errors.dynos}` : members.map(d => `${d.name.padEnd(22)} ${d.state.padEnd(10)} age ${age(d.created_at)}`).join('\n') || 'No dynos currently running.')
-    rows.push(row(`${f.type}  ·  desired ${f.quantity}  ·  running ${running}`, detail,
-      {id: `health:${f.type}`, processType: f.type, icon: 'resources', tone: errors.dynos ? 'muted' : crashed ? 'error' : running < f.quantity ? 'warning' : f.quantity ? 'success' : 'muted', emphasis: status,
-        columns: [f.type, f.quantity, errors.dynos ? '—' : running, status]}))
-  }
-  if (!errors.releases && !data.pending?.includes('releases')) rows.push(row(`Deployments    ${releases.filter(r => r.status === 'succeeded').length} succeeded / ${releases.length} recent releases`,
-    `Latest ${releases.length} releases (up to ${RELEASE_LIMIT}).\n${releases.filter(r => r.status === 'failed').length} failed releases.\nLatest release: ${releases[0] ? `v${releases[0].version}, ${age(releases[0].created_at)} ago` : 'none'}.`, {id: 'releases', icon: 'releases', tone: releases.some(r => r.status === 'failed') ? 'warning' : 'info',
-      columns: ['Releases OK', releases.length, releases.filter(r => r.status === 'succeeded').length, !releases.length ? 'No releases' : releases.some(r => r.status === 'failed') ? `${releases.filter(r => r.status === 'failed').length} failed` : 'Succeeded']}))
   rows.push(row(`Snapshot: ${new Date(data.fetchedAt).toLocaleTimeString()}`, `Platform snapshot: ${data.fetchedAt}\n\nPerformance rows use separate time-bucketed data from api.metrics.heroku.com.\nSelect a metric for its sample time, resolution, coverage, and sparkline.\nPress R to refresh, or o to open the metrics dashboard.`, {id: 'snapshot', icon: 'clock', tone: 'muted',
     columns: ['Snapshot', '—', new Date(data.fetchedAt).toLocaleTimeString(), 'Fetched']}))
   return rows

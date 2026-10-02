@@ -36,7 +36,7 @@ test('all views render demo data and errors without exposing config inadvertentl
   assert.match(JSON.stringify(appRows('Metrics', data)), /unavailable/)
 })
 
-test('Releases, Overview, and Metrics use only the newest 20 releases from oversized snapshots', async t => {
+test('Releases and Overview use only the newest 20 releases from oversized snapshots', async t => {
   t.mock.timers.enable({apis: ['Date'], now: Date.parse('2026-10-02T12:00:00Z')})
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)
@@ -54,10 +54,6 @@ test('Releases, Overview, and Metrics use only the newest 20 releases from overs
   assert.match(latest.detail, /Description\s+Deploy commit350/)
   assert.match(latest.detail, /Age\s+1h 0m/)
   assert.match(latest.detail, /Created\s+2026-10-02T11:00:00.000Z/)
-  const metrics = appRows('Metrics', data).find(row => row.id === 'releases')
-  assert.match(metrics.detail, /Latest 20 releases \(up to 20\)/)
-  assert.match(metrics.detail, /0 failed releases/)
-  assert.equal(metrics.columns[1], 20)
   assert.equal(data.releases.length, 350)
   assert.equal(data.releases[0].version, 1)
 })
@@ -87,9 +83,7 @@ test('metrics columns show unavailable dyno counts as unknown rather than zero',
   data.errors.dynos = 'Permission denied'
   const metrics = appRows('Metrics', data)
   assert.deepEqual(metrics.find(row => row.columns[0] === 'Dyno health').columns, ['Dyno health', '—', '—', 'Unavailable'])
-  const web = metrics.find(row => row.columns[0] === 'web')
-  assert.deepEqual(web.columns, ['web', 2, '—', 'Unavailable'])
-  assert.match(web.detail, /Permission denied/)
+  assert.match(metrics.find(row => row.label === 'dynos unavailable').detail, /Permission denied/)
 })
 
 test('operational metrics exclude one-off dynos from desired formation health', async () => {

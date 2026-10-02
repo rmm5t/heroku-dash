@@ -142,7 +142,7 @@ While data is loading, an OpenCode-inspired purple scanner (`■` / `⬝`) sweep
 | **4 Config** | View config keys; reveal or copy a selected value; create, replace, or delete variables |
 | **5 Settings** | Add domains with optional ACM or remove custom domains; copy domain Hostname/CNAME values; inspect buildpacks, region, stack, and space; toggle maintenance mode |
 | **6 Releases** | Inspect the latest 20 releases, fetched in one API page, including status, author, description, and timestamp |
-| **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and selectable-timeframe charts, alongside dyno health and recent deployment outcomes |
+| **7 Metrics** | View throughput, p50/p95/p99 response times, memory usage/quota, dyno load, and selectable-timeframe charts, alongside dyno health |
 
 ### Keyboard shortcuts
 
@@ -190,7 +190,7 @@ App actions:
 
 In every text prompt, `Enter` continues and `Esc` cancels. Readline-style editing supports `Ctrl-A` / `Ctrl-E`, `Ctrl-B` / `Ctrl-F`, `Ctrl-T`, `Ctrl-U` / `Ctrl-K`, `Ctrl-W` / `Ctrl-Y`, and `Alt-B` / `Alt-F` / `Alt-D`. `Ctrl-U` kills text to the left of the cursor; `Ctrl-Y` restores the last killed text. Config-value input is masked. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
 
-The release history is requested newest-first with a 100-release page limit and automatic pagination disabled. Dash also caps retained and displayed releases at 100, so long histories do not trigger additional release-page requests during refresh. Overview and Metrics use the same recent-release window.
+The release history is requested newest-first with a 100-release page limit and automatic pagination disabled. Dash also caps retained and displayed releases at 100, so long histories do not trigger additional release-page requests during refresh. Overview uses the same recent-release window.
 
 ### Live logs
 
