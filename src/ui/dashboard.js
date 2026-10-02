@@ -15,6 +15,7 @@ import {tableColumns} from './columns.js'
 import {LogBuffer, LOG_LIMITS} from './log-buffer.js'
 import {ModalLifecycle} from './modal-lifecycle.js'
 import {enableReadline} from './readline.js'
+import {runRead} from './read-operation.js'
 import {badge, highlightKeys, icons, paint, palette, rowLabel, SCANNER_INTERVAL, scannerFrame, setTheme, shortcut, stageStyles, styleListSelection, tabIcons} from './theme.js'
 import {detectTerminalTheme, ThemeInput} from './terminal-theme.js'
 
@@ -76,6 +77,7 @@ export class Dashboard {
     this.modalLifecycle = null
     this.interactiveRequest = null
     this.promotionRequest = null
+    this.preparationRequest = null
     this.openingBrowser = false
     this.busy = false
     this.appSnapshots = new AppSnapshotCache()
@@ -549,26 +551,25 @@ export class Dashboard {
   }
 
   async loadAppHierarchy(data) {
-    const request = this.readRequests.start('hierarchy', () => this.data === data)
-    const {signal} = request.controller
-    try {
-      const hierarchy = await withAbort(resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline, signal}), signal)
-      if (!request.current()) return
-      this.pipeline = hierarchy.pipeline
-      this.breadcrumbTeam = hierarchy.team
-      delete data.errors.hierarchy
-      Object.assign(data.errors, hierarchy.errors)
-      if (hierarchy.errors.hierarchy) {
-        this.message = `${this.message} · ${hierarchy.errors.hierarchy}`
-        this.messageTone = 'warning'
-        this.drawApp({preserveScroll: true})
-      } else this.render()
-    } catch (error) {
-      if (request.current()) {
+    await runRead(this, 'hierarchy', {
+      isCurrent: () => this.data === data,
+      read: ({signal}) => resolveHierarchy(this.api, this.catalog, {app: data.app, pipeline: data.coupling?.pipeline, signal}),
+      onSuccess: hierarchy => {
+        this.pipeline = hierarchy.pipeline
+        this.breadcrumbTeam = hierarchy.team
+        delete data.errors.hierarchy
+        Object.assign(data.errors, hierarchy.errors)
+        if (hierarchy.errors.hierarchy) {
+          this.message = `${this.message} · ${hierarchy.errors.hierarchy}`
+          this.messageTone = 'warning'
+          this.drawApp({preserveScroll: true})
+        } else this.render()
+      },
+      onError: error => {
         data.errors.hierarchy = errorMessage(error)
         this.drawApp({preserveScroll: true})
-      }
-    } finally { request.finish() }
+      },
+    })
   }
 
   drawApp({preserveScroll = false} = {}) {
@@ -621,36 +622,34 @@ export class Dashboard {
     const signature = metricsScope(this.data, this.metricsWindowHours)
     if (this.metricsRequest && !force) return
     if (!force && !refresh && this.metricsSignature === signature && Date.now() - this.metricsRequestedAt < 30_000) return
-    const request = this.readRequests.start('metrics')
-    this.metricsRequest = request
-    this.metricsSignature = signature
-    this.metricsRequestedAt = Date.now()
-    this.metricsError = null
-    const finishLoading = this.beginLoading('metrics', `Loading performance metrics · ${metricsTimeframe(this.metricsWindowHours).label}…`)
-    try {
-      const snapshot = await withAbort(this.fetchMetrics(this.data, {signal: request.controller.signal, windowHours: this.metricsWindowHours}), request.controller.signal)
-      if (!request.current()) return
-      this.telemetry = snapshot
-      const failures = Object.values(snapshot.failures ?? {})
-      const pause = this.recordRefreshResult('metrics', failures)
-      if (failures.length && pause) {
-        this.message = `Some performance metrics unavailable.${pause}`
-        this.messageTone = 'warning'
-      }
-    } catch (error) {
-      if (request.current()) {
+    await runRead(this, 'metrics', {
+      label: `Loading performance metrics · ${metricsTimeframe(this.metricsWindowHours).label}…`,
+      onStart: request => {
+        this.metricsRequest = request
+        this.metricsSignature = signature
+        this.metricsRequestedAt = Date.now()
+        this.metricsError = null
+      },
+      read: ({signal}) => this.fetchMetrics(this.data, {signal, windowHours: this.metricsWindowHours}),
+      onSuccess: snapshot => {
+        this.telemetry = snapshot
+        const failures = Object.values(snapshot.failures ?? {})
+        const pause = this.recordRefreshResult('metrics', failures)
+        if (failures.length && pause) {
+          this.message = `Some performance metrics unavailable.${pause}`
+          this.messageTone = 'warning'
+        }
+      },
+      onError: error => {
         this.metricsError = errorMessage(error)
         const pause = this.recordRefreshResult('metrics', [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
         if (pause) { this.message = `${this.metricsError}${pause}`; this.messageTone = 'warning' }
-      }
-    } finally {
-      if (request.current()) {
+      },
+      onFinish: () => {
         this.metricsRequest = null
         if (TABS[this.tab] === 'Metrics') this.drawApp({preserveScroll: true})
-      }
-      request.finish()
-      finishLoading()
-    }
+      },
+    })
   }
 
   resetResourceDetails() {
@@ -669,22 +668,21 @@ export class Dashboard {
     if (pendingSections(TABS[this.tab], this.data).length) return
     if (!force && (this.resourceData[kind] || this.resourceErrors[kind] || this.readRequests.has(`resources-${kind}`))) return
     const data = this.data
-    const request = this.readRequests.start(`resources-${kind}`, () => this.data === data)
-    const {signal} = request.controller
-    const finishLoading = this.beginLoading(`resources-${kind}`, `Loading ${kind === 'dynos' ? 'dyno costs and allocations' : 'add-on costs and limits'}…`)
-    try {
-      const result = await withAbort(this.resources[kind](data, {force, signal}), signal)
-      if (!request.current()) return
-      this.resourceData[kind] = result
-      delete this.resourceErrors[kind]
-      this.recordRefreshResult(`resources-${kind}`, [])
-    } catch (error) {
-      if (!request.current()) return
-      this.resourceErrors[kind] = errorMessage(error)
-      const pause = this.recordRefreshResult(`resources-${kind}`, [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
-      if (pause) { this.message = `${this.resourceErrors[kind]}${pause}`; this.messageTone = 'warning' }
-    } finally {
-      if (request.current()) {
+    await runRead(this, `resources-${kind}`, {
+      label: `Loading ${kind === 'dynos' ? 'dyno costs and allocations' : 'add-on costs and limits'}…`,
+      isCurrent: () => this.data === data,
+      read: ({signal}) => this.resources[kind](data, {force, signal}),
+      onSuccess: result => {
+        this.resourceData[kind] = result
+        delete this.resourceErrors[kind]
+        this.recordRefreshResult(`resources-${kind}`, [])
+      },
+      onError: error => {
+        this.resourceErrors[kind] = errorMessage(error)
+        const pause = this.recordRefreshResult(`resources-${kind}`, [{statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}])
+        if (pause) { this.message = `${this.resourceErrors[kind]}${pause}`; this.messageTone = 'warning' }
+      },
+      onFinish: () => {
         if ({Resources: 'dynos', 'Add-ons': 'addons'}[TABS[this.tab]] === kind) {
           // getScroll() includes Blessed's cursor offset; childBase is the
           // actual first visible line that should survive this redraw.
@@ -693,10 +691,8 @@ export class Dashboard {
           this.detail.setScroll(scroll)
           this.render()
         }
-      }
-      request.finish()
-      finishLoading()
-    }
+      },
+    })
   }
 
   setRows(rows, preserve = false) {
@@ -776,22 +772,13 @@ export class Dashboard {
 
   async loadConfig() {
     if (!this.app || this.closed) return
-    const request = this.readRequests.start('config')
-    const {signal} = request.controller
-    const finishLoading = this.beginLoading('config', `Loading config vars for ${this.app.name}…`)
-    try {
-      const config = await withAbort(this.api.config(this.app.id, {signal}), signal)
-      if (!request.current()) return
-      this.config = config
-      this.configError = null
-    } catch (error) {
-      if (!request.current()) return
-      this.configError = errorMessage(error)
-    } finally {
-      if (request.current()) this.drawApp()
-      request.finish()
-      finishLoading()
-    }
+    await runRead(this, 'config', {
+      label: `Loading config vars for ${this.app.name}…`,
+      read: options => this.api.config(this.app.id, options),
+      onSuccess: config => { this.config = config; this.configError = null },
+      onError: error => { this.configError = errorMessage(error) },
+      onFinish: () => this.drawApp(),
+    })
   }
 
   async back() {
@@ -819,18 +806,17 @@ export class Dashboard {
       if (!this.closed && generation === this.generation && this.app?.id === appId && TABS[this.tab] === 'Config') await this.loadConfig()
     } else if (this.pipeline) await this.openPipeline(this.pipeline)
     else {
-      const request = this.readRequests.start('catalog')
-      const {signal} = request.controller
       this.setStatus('Refreshing teams, pipelines, and apps…')
-      const finishLoading = this.beginLoading('catalog', 'Refreshing teams, pipelines, and apps…')
-      try {
-        const catalog = await withAbort(this.api.catalog({signal}), signal)
-        if (!request.current()) return
-        this.catalog = catalog
-        this.drawNav()
-        this.setStatus(catalog.warnings.join(' | ') || 'Workspace refreshed.', catalog.warnings.length ? 'warning' : 'success')
-      } catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error') }
-      finally { request.finish(); finishLoading() }
+      await runRead(this, 'catalog', {
+        label: 'Refreshing teams, pipelines, and apps…',
+        read: options => this.api.catalog(options),
+        onSuccess: catalog => {
+          this.catalog = catalog
+          this.drawNav()
+          this.setStatus(catalog.warnings.join(' | ') || 'Workspace refreshed.', catalog.warnings.length ? 'warning' : 'success')
+        },
+        onError: error => this.setStatus(errorMessage(error), 'error'),
+      })
     }
   }
 
@@ -910,26 +896,20 @@ export class Dashboard {
     let pipeline = this.pipeline
     const generation = this.generation
     const current = () => !this.closed && this.generation === generation && !this.app && this.pipeline?.id === pipeline.id
-    const request = this.readRequests.start('app-options', current)
-    const {signal} = request.controller
-    const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
-      content: `\n  ${badge('refresh', 'Loading Add App options…', 'info')}`})
-    const loadingLifecycle = new ModalLifecycle(this, loading)
-    loadingLifecycle.addCleanup(() => { if (request.current()) request.controller.abort() })
-    this.busy = true
-    const finishLoading = this.beginLoading('app-options', 'Loading runtime regions…')
-    let regions
+    let result
     try {
-      const [available, details] = await withAbort(Promise.all([
-        this.api.appRegions({signal}),
-        Object.hasOwn(pipeline, 'owner') ? pipeline : this.api.get(`/pipelines/${encodeURIComponent(pipeline.id)}`, {signal}),
-      ]), signal)
-      regions = available
-      pipeline = details
-      if (!regions.length) throw new Error('No Common Runtime regions are available.')
-    } catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error'); return }
-    finally { request.finish(); loadingLifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
-    if (!current()) return
+      result = await this.prepareRead('app-options', 'Loading runtime regions…', async options => {
+        const [regions, details] = await Promise.all([
+          this.api.appRegions(options),
+          Object.hasOwn(pipeline, 'owner') ? pipeline : this.api.get(`/pipelines/${encodeURIComponent(pipeline.id)}`, options),
+        ])
+        if (!regions.length) throw new Error('No Common Runtime regions are available.')
+        return {regions, pipeline: details}
+      }, current, 'Loading Add App options…')
+    } catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    if (!result || !current()) return
+    const {regions} = result.value
+    pipeline = result.value.pipeline
     const title = `Add App · ${pipeline.name}`
     const stage = await this.choose(`${title} · Stage`, 'Choose the pipeline stage for the new app.',
       APP_STAGES.map(value => ({label: value, value})), 1)
@@ -985,22 +965,17 @@ export class Dashboard {
     const appContext = Boolean(this.app)
     const current = () => !this.closed && this.generation === generation && this.pipeline?.id === pipeline.id
       && (this.app?.id ?? this.rows[this.main.selected]?.value?.id) === selected.id
-    const request = this.readRequests.start('promotion-options', current)
-    const {signal} = request.controller
-    const loading = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
-      content: `\n  ${badge('refresh', 'Loading promotion destinations…', 'info')}`})
-    const loadingLifecycle = new ModalLifecycle(this, loading)
-    loadingLifecycle.addCleanup(() => { if (request.current()) request.controller.abort() })
-    this.busy = true
-    const finishLoading = this.beginLoading('promotion-options', 'Loading promotion destinations…')
-    let apps
+    let result
     try {
-      apps = await withAbort(this.api.pipelineApps(pipeline.id, {signal}), signal)
-      if (apps.some(app => app.loadError)) throw new Error('Some pipeline apps are unavailable. Refresh the pipeline before promoting.')
+      result = await this.prepareRead('promotion-options', 'Loading promotion destinations…', async options => {
+        const apps = await this.api.pipelineApps(pipeline.id, options)
+        if (apps.some(app => app.loadError)) throw new Error('Some pipeline apps are unavailable. Refresh the pipeline before promoting.')
+        return apps
+      }, current)
     }
-    catch (error) { if (request.current()) this.setStatus(errorMessage(error), 'error'); return }
-    finally { request.finish(); loadingLifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
-    if (!current()) return
+    catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
+    if (!result || !current()) return
+    const apps = result.value
     const source = apps.find(app => app.id === selected.id)
     const sourceIndex = APP_STAGES.indexOf(source?.stage)
     if (!source || sourceIndex < 0 || sourceIndex === APP_STAGES.length - 1) {
@@ -1209,22 +1184,11 @@ export class Dashboard {
     const pipeline = this.pipeline
     const generation = this.generation
     const current = () => !this.closed && generation === this.generation && this.app?.id === destination.id && this.pipeline?.id === pipeline.id
-    const load = async (label, action) => {
-      const request = this.readRequests.start('config-clone-read', current)
-      const {signal} = request.controller
-      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
-        content: `\n  ${badge('refresh', label, 'info')}`})
-      const lifecycle = new ModalLifecycle(this, modal)
-      lifecycle.addCleanup(() => { if (request.current()) request.controller.abort() })
-      this.busy = true
-      const finishLoading = this.beginLoading('config-clone', label)
-      try { return await withAbort(action({signal}), signal) }
-      finally { request.finish(); lifecycle.close({restoreFocus: false, render: false}); this.busy = false; finishLoading(); this.render() }
-    }
-    let apps
-    try { apps = await load('Loading source apps…', options => this.api.pipelineApps(pipeline.id, options)) }
+    let result
+    try { result = await this.prepareRead('config-clone-read', 'Loading source apps…', options => this.api.pipelineApps(pipeline.id, options), current) }
     catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
-    if (!current()) return
+    if (!result || !current()) return
+    const apps = result.value
     const sources = apps.filter(app => app.id !== destination.id && !app.loadError)
     if (!sources.length) {
       this.setStatus(apps.some(app => app.id !== destination.id && app.loadError)
@@ -1235,10 +1199,10 @@ export class Dashboard {
     const source = await this.choose(`Clone Config · ${destination.name}`, `Pipeline: ${pipeline.name}\nChoose the app to clone config vars from into the current app.`,
       sources.map(app => ({label: `${app.name} · ${app.stage}`, value: app})))
     if (source === null || !current()) return
-    let plan
-    try { plan = await load('Preparing config clone…', options => this.api.prepareConfigClone({pipeline, source, destination}, options)) }
+    try { result = await this.prepareRead('config-clone-read', 'Preparing config clone…', options => this.api.prepareConfigClone({pipeline, source, destination}, options), current) }
     catch (error) { if (current()) this.setStatus(errorMessage(error), 'error'); return }
-    if (!current()) return
+    if (!result || !current()) return
+    const plan = result.value
     const count = Object.keys(plan.values).length
     if (!count) { this.setStatus('There are no config vars to clone after excluding HEROKU_* variables.', 'warning'); return }
     const confirmation = await this.confirm(destination,
@@ -1247,6 +1211,24 @@ export class Dashboard {
     await this.mutate(() => this.api.clonePipelineConfig(plan, confirmation), {
       successMessage: `Cloned ${count} config vars from ${source.name} into ${destination.name}. Config refreshed.`,
     })
+  }
+
+  prepareRead(key, label, read, isCurrent, modalLabel = label) {
+    return runRead(this, key, {label, read, isCurrent, onStart: request => {
+      const modal = blessed.box({parent: this.screen, top: 'center', left: 'center', width: '70%', height: 5, ...frame(),
+        content: `\n  ${badge('refresh', modalLabel, 'info')}`})
+      const lifecycle = new ModalLifecycle(this, modal)
+      this.preparationRequest = request
+      this.busy = true
+      lifecycle.addCleanup(() => {
+        if (request.current()) request.controller.abort()
+        if (this.preparationRequest === request) {
+          this.preparationRequest = null
+          this.busy = false
+        }
+      })
+      return () => { lifecycle.close({restoreFocus: false, render: false}); this.render() }
+    }})
   }
 
   async copyDomainCNAME() {

@@ -3158,19 +3158,27 @@ test('config deletion and maintenance toggle target the confirmed app', async t 
 })
 
 test('destroying progress modals cancels preparation and cannot replace a newer dialog', async t => {
-  for (const action of ['addApp', 'promoteApp']) {
+  for (const action of ['addApp', 'promoteApp', 'cloneConfigFromApp']) {
     const pending = Promise.withResolvers()
     let signal
     const {dashboard: d} = await harness(t, {demo: false})
     d.api.readOnly = false
     d.api.createPipelineApp = () => assert.fail('Canceled preparation must not create an app')
     d.api.promotePipelineApp = () => assert.fail('Canceled preparation must not promote an app')
+    d.api.clonePipelineConfig = () => assert.fail('Canceled preparation must not clone config')
+    if (action === 'cloneConfigFromApp') {
+      d.api.config = async () => ({})
+      await d.openApp(d.catalog.apps[0])
+      d.tab = 3
+      await d.loadConfig()
+    }
     if (action === 'addApp') d.api.appRegions = options => { signal = options.signal; return pending.promise }
     else d.api.pipelineApps = (_id, options) => { signal = options.signal; return pending.promise }
     const preparing = d[action]()
     const progress = d.modal
     progress.destroy()
     assert.equal(signal.aborted, true)
+    assert.equal(d.busy, false)
     const next = d.prompt('Next prompt', 'A newer modal stays active.')
     const replacement = d.modal
     const lifecycle = d.modalLifecycle
@@ -3184,6 +3192,46 @@ test('destroying progress modals cancels preparation and cannot replace a newer 
     lifecycle.close()
     assert.equal(await next, null)
   }
+})
+
+test('canceling config clone preparation suppresses late failures and leaves newer preparation busy', async t => {
+  const {dashboard: d} = await harness(t, {demo: false})
+  d.api.readOnly = false
+  d.api.config = async () => ({})
+  await d.openApp(d.catalog.apps[0])
+  d.tab = 3
+  await d.loadConfig()
+  d.api.clonePipelineConfig = () => assert.fail('Canceled preparation must not clone config')
+  const pending = Promise.withResolvers()
+  let signal
+  d.api.prepareConfigClone = (_plan, options) => { signal = options.signal; return pending.promise }
+  const cloning = d.cloneConfigFromApp()
+  await new Promise(resolve => setImmediate(resolve))
+  const choices = d.modal.children.find(child => child.type === 'list')
+  choices.emit('select', choices.items[0], 0)
+  await new Promise(resolve => setImmediate(resolve))
+  d.modal.destroy()
+  assert.equal(signal.aborted, true)
+  assert.equal(d.busy, false)
+  const replacement = Promise.withResolvers()
+  const preparing = d.prepareRead('new-preparation', 'Preparing another action…', () => replacement.promise)
+  const modal = d.modal
+  const request = d.preparationRequest
+  const message = d.message
+  await cloning
+  assert.equal(d.modal, modal)
+  assert.equal(d.preparationRequest, request)
+  assert.equal(d.busy, true)
+  assert.equal(d.loading.has('new-preparation'), true)
+  pending.reject(new Error('Late config clone failure'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(d.message, message)
+  replacement.resolve({ready: true})
+  assert.deepEqual(await preparing, {value: {ready: true}})
+  assert.equal(d.modal, null)
+  assert.equal(d.busy, false)
+  assert.equal(d.preparationRequest, null)
+  assert.equal(d.loading.size, 0)
 })
 
 test('prompt, choice, and confirmation promises settle when their widgets are destroyed or Dash closes', {timeout: 3000}, async t => {
