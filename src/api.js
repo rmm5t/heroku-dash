@@ -1,6 +1,7 @@
 import {setTimeout as delay} from 'node:timers/promises'
 import {isIP} from 'node:net'
 import {domainToASCII} from 'node:url'
+import {mapConcurrent} from './concurrency.js'
 import {withAbort} from './read-requests.js'
 import {recentReleases, RELEASE_LIMIT} from './releases.js'
 import {validateConfigKey, validateDynoQuantity, validateDynoSize} from './validation.js'
@@ -140,23 +141,16 @@ export class HerokuAPI {
 
   async pipelineApps(pipeline, options = {}) {
     const couplings = await this.list(`/pipelines/${encode(pipeline)}/pipeline-couplings`, options)
-    const apps = new Array(couplings.length)
-    let next = 0
-    await Promise.all(Array.from({length: Math.min(4, couplings.length)}, async () => {
-      while (next < couplings.length) {
+    const apps = await mapConcurrent(couplings, async coupling => {
+      try {
+        return {...await this.get(`/apps/${encode(coupling.app.id)}`, options), stage: coupling.stage}
+      } catch (error) {
         options.signal?.throwIfAborted()
-        const index = next++
-        const coupling = couplings[index]
-        try {
-          apps[index] = {...await this.get(`/apps/${encode(coupling.app.id)}`, options), stage: coupling.stage}
-        } catch (error) {
-          options.signal?.throwIfAborted()
-          // Retain failed members so views and actions can account for every app.
-          apps[index] = {...coupling.app, name: coupling.app.name ?? coupling.app.id,
-            stage: coupling.stage, loadError: errorMessage(error) || 'Unable to load app details.'}
-        }
+        // Retain failed members so views and actions can account for every app.
+        return {...coupling.app, name: coupling.app.name ?? coupling.app.id,
+          stage: coupling.stage, loadError: errorMessage(error) || 'Unable to load app details.'}
       }
-    }))
+    }, {signal: options.signal})
     options.signal?.throwIfAborted()
     return apps
   }

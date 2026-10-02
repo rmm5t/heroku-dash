@@ -174,3 +174,27 @@ test('requests are bounded and cancellation or rate limits stop queued work', as
   assert.equal(Object.keys(limited.failures).length, 4)
   assert.ok(Object.values(limited.failures).every(failure => failure.statusCode === 429 && failure.retryAfterMs === 90_000))
 })
+
+test('rate limits annotate queued metrics while preserving successful in-flight results', async () => {
+  const calls = []
+  const loading = fetchTelemetry({get(path) {
+    const pending = Promise.withResolvers()
+    calls.push({url: new URL(path), ...pending})
+    return pending.promise
+  }}, appData())
+  assert.equal(calls.length, 4)
+  calls[0].reject({statusCode: 429, headers: {'retry-after': '90'}})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.length, 4)
+  for (const call of calls.slice(1).reverse()) call.resolve(reply(call.url))
+  const result = await loading
+  assert.ok(result.router.latency)
+  assert.ok(result.processes.web.memory)
+  assert.ok(result.processes.web.load)
+  assert.equal(result.router.status, null)
+  assert.equal(result.processes.worker.memory, null)
+  assert.equal(result.processes.worker.load, null)
+  assert.deepEqual(Object.keys(result.errors).sort(), ['router.status', 'worker.load', 'worker.memory'])
+  assert.ok(Object.values(result.errors).every(message => message.includes('rate limit')))
+  assert.deepEqual(result.failures, {'router.status': {statusCode: 429, retryAfterMs: 90_000}})
+})

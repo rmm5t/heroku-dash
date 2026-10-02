@@ -1,4 +1,5 @@
 import {errorMessage, retryAfterMs, statusCode} from './api.js'
+import {mapConcurrent} from './concurrency.js'
 
 export const METRICS_HOST = 'https://api.metrics.heroku.com'
 export const METRICS_WINDOW_MS = 2 * 60 * 60_000
@@ -89,7 +90,6 @@ export async function fetchTelemetry(api, data, {now = Date.now(), signal, windo
         process, result.processes[process.type], metric)
     }
   }
-  let next = 0
   let rateLimit = null
   const load = async (job, step) => {
     const end = Math.floor(now / (step * MINUTE)) * step * MINUTE
@@ -101,25 +101,22 @@ export async function fetchTelemetry(api, data, {now = Date.now(), signal, windo
     const body = await api.get(`${METRICS_HOST}${job.route}?${query}`, {method: 'GET', retryAuth: false, timeout: 15_000, signal})
     return normalizeMetric(body, window)
   }
-  await Promise.all(Array.from({length: Math.min(4, jobs.length)}, async () => {
-    while (next < jobs.length && !signal?.aborted) {
-      const job = jobs[next++]
-      if (rateLimit) { result.errors[job.key] = rateLimit; continue }
-      try {
-        try { job.target[job.field] = await load(job, job.step) }
-        catch (error) {
-          // Some app tiers only accept the coarser resolution.
-          if (job.step !== 1 || statusCode(error) !== 400 || signal?.aborted) throw error
-          job.target[job.field] = await load(job, 10)
-        }
-      } catch (error) {
-        if (signal?.aborted) return
-        result.errors[job.key] = errorMessage(error)
-        result.failures[job.key] = {statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}
-        if (statusCode(error) === 429) rateLimit = result.errors[job.key]
+  await mapConcurrent(jobs, async job => {
+    if (rateLimit) { result.errors[job.key] = rateLimit; return }
+    try {
+      try { job.target[job.field] = await load(job, job.step) }
+      catch (error) {
+        // Some app tiers only accept the coarser resolution.
+        if (job.step !== 1 || statusCode(error) !== 400 || signal?.aborted) throw error
+        job.target[job.field] = await load(job, 10)
       }
+    } catch (error) {
+      if (signal?.aborted) return
+      result.errors[job.key] = errorMessage(error)
+      result.failures[job.key] = {statusCode: statusCode(error), retryAfterMs: retryAfterMs(error)}
+      if (statusCode(error) === 429) rateLimit = result.errors[job.key]
     }
-  }))
+  }, {signal})
   return result
 }
 
