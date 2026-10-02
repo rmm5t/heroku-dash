@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
+import {mkdtemp, rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import {PassThrough, Writable} from 'node:stream'
 import {setTimeout as delay} from 'node:timers/promises'
 import test from 'node:test'
 import blessed from 'blessed'
 import {createDemo, demoTelemetry} from '../src/demo.js'
+import {loadLogFilterHistory} from '../src/log-filter-history.js'
 import {RefreshBackoff} from '../src/refresh-policy.js'
 import {Dashboard} from '../src/ui/dashboard.js'
 import {clean} from '../src/ui/text.js'
@@ -2345,6 +2349,175 @@ test('log filters accept regexes directly and literal brackets without interrupt
   assert.equal(options.signal.aborted, true)
 })
 
+test('log-filter history is shared within a pipeline, isolated by pipeline ID, and restored in later sessions', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'heroku-dash-log-history-'))
+  t.after(() => rm(root, {recursive: true, force: true}))
+  const history = await loadLogFilterHistory(root)
+  const writes = []
+  const trackedHistory = history => ({
+    entries: scope => history.entries(scope),
+    add(scope, value) { const write = history.add(scope, value); writes.push(write); return write },
+  })
+  const executeHeroku = async (_args, {onOutput}) => { onOutput('ERROR status=500\nWARN worker\n'); return {code: 0, signal: null} }
+  const {dashboard: d, screen, key} = await harness(t, {demo: false, logFilterHistory: trackedHistory(history), executeHeroku})
+  const [staging, production] = d.catalog.apps
+  await d.openApp(staging)
+  await d.openLogs()
+  for (const filter of ['error|warn', 'status=5\\d{2}']) {
+    await key('/')
+    await key('\x15')
+    await key(filter)
+    await key('\r')
+  }
+  const scope = `pipeline:${d.pipeline.id}`
+  await Promise.all(writes)
+  assert.deepEqual(history.entries(scope), ['error|warn', 'status=5\\d{2}'])
+
+  await d.openApp(production)
+  await d.openLogs()
+  await key('/')
+  const editor = screen.focused
+  assert.match(clean(editor._label.content), /↑\/↓ history/)
+  await key('draft search')
+  await key('\x10')
+  assert.equal(editor.getValue(), 'status=5\\d{2}')
+  await key('\x1b[A')
+  assert.equal(editor.getValue(), 'error|warn')
+  await key('\x0e')
+  assert.equal(editor.getValue(), 'status=5\\d{2}')
+  await key('\x1b[B')
+  assert.equal(editor.getValue(), 'draft search')
+  await key('\x1b')
+  assert.equal(writes.length, 2)
+  assert.match(d.modal.children.map(child => clean(child.content)).join('\n'), /Following/)
+  await key('/')
+  await key('\r')
+  assert.deepEqual(history.entries(scope), ['error|warn', 'status=5\\d{2}'])
+
+  const otherPipeline = {...d.pipeline, id: 'other-pipeline'}
+  d.catalog.pipelines.push(otherPipeline)
+  const appData = d.api.appData.bind(d.api)
+  d.api.appData = async id => ({...await appData(id), coupling: {pipeline: otherPipeline}})
+  await d.openApp(production)
+  await d.openLogs()
+  await key('/')
+  await key('\x1b[A')
+  assert.equal(screen.focused.getValue(), '')
+  await key('worker')
+  await key('\r')
+  await Promise.all(writes)
+  assert.deepEqual(history.entries('pipeline:other-pipeline'), ['worker'])
+  assert.deepEqual(history.entries(scope), ['error|warn', 'status=5\\d{2}'])
+  d.close()
+
+  const restored = await loadLogFilterHistory(root)
+  const demo = createDemo()
+  const originalAppData = demo.api.appData.bind(demo.api)
+  const renamed = {...demo.context.pipeline, name: 'renamed-pipeline'}
+  demo.api.appData = async id => ({...await originalAppData(id), coupling: {pipeline: renamed}})
+  const next = await harness(t, {...demo, demo: false, logFilterHistory: trackedHistory(restored), executeHeroku})
+  await next.dashboard.openApp(next.dashboard.catalog.apps[0])
+  assert.equal(next.dashboard.pipeline.name, 'renamed-pipeline')
+  await next.dashboard.openLogs()
+  await next.key('/')
+  await next.key('\x10')
+  assert.equal(next.screen.focused.getValue(), 'status=5\\d{2}')
+  await next.key('\x1b[A')
+  assert.equal(next.screen.focused.getValue(), 'error|warn')
+  await next.key('\r')
+  assert.match(clean(next.dashboard.logRequest.output.content), /ERROR/)
+  await Promise.all(writes)
+})
+
+test('reopened log filters skip the displayed newest history entry and restore edited drafts', async t => {
+  let entries = ['error', 'warn', 'worker']
+  const logFilterHistory = {
+    entries() { return entries },
+    add(_scope, value) { entries = [...entries.filter(entry => entry !== value), value] },
+  }
+  const {dashboard: d, screen, key} = await harness(t, {demo: false, logFilterHistory,
+    executeHeroku: async () => ({code: 0, signal: null})})
+  await d.openApp(d.catalog.apps[0])
+  await d.openLogs()
+  await key('/')
+  await key('worker')
+  await key('\r')
+
+  for (const [previous, next] of [['\x1b[A', '\x1b[B'], ['\x10', '\x0e']]) {
+    await key('/')
+    const editor = screen.focused
+    assert.equal(editor.getValue(), 'worker')
+    await key(previous)
+    assert.equal(editor.getValue(), 'warn', 'One history step must move past the displayed filter')
+    await key(previous)
+    assert.equal(editor.getValue(), 'error')
+    await key(next)
+    assert.equal(editor.getValue(), 'warn')
+    await key(next)
+    assert.equal(editor.getValue(), 'worker')
+    await key('\x1b')
+  }
+
+  await key('/')
+  await key(' draft')
+  const editor = screen.focused
+  await key('\x10')
+  assert.equal(editor.getValue(), 'worker', 'An edited draft must start at the newest history entry')
+  await key('\x0e')
+  assert.equal(editor.getValue(), 'worker draft')
+  await key('\x1b')
+  assert.deepEqual(entries, ['error', 'warn', 'worker'])
+})
+
+test('log-filter history uses resolved pipeline membership and isolates confirmed standalone apps', async t => {
+  const histories = new Map([
+    ['pipeline:pipeline-demo', ['pipeline search']],
+    ['app:app-staging', ['standalone staging']], ['app:app-production', ['standalone production']],
+  ])
+  const added = []
+  const logFilterHistory = {
+    entries: scope => histories.get(scope) ?? [],
+    add(scope, value) { added.push({scope, value}) },
+  }
+  const {dashboard: d, screen, key} = await harness(t, {demo: false, logFilterHistory,
+    executeHeroku: async () => ({code: 0, signal: null})})
+  const [staging, production] = d.catalog.apps
+  const appData = d.api.appData.bind(d.api)
+  const pending = Promise.withResolvers()
+  d.api.appData = () => pending.promise
+  const loading = d.openApp(staging)
+  await d.openLogs()
+  await key('/')
+  await key('\x10')
+  assert.equal(screen.focused.getValue(), '', 'Unknown membership must not use standalone history')
+  await key('new search')
+  pending.resolve(await appData(staging.id))
+  await loading
+  await key('\r')
+  assert.deepEqual(added, [{scope: 'pipeline:pipeline-demo', value: 'new search'}])
+
+  d.api.appData = async id => ({...await appData(id), coupling: null})
+  for (const [app, filter] of [[staging, 'standalone staging'], [production, 'standalone production']]) {
+    await d.openApp(app)
+    await d.openLogs()
+    await key('/')
+    await key('\x1b[A')
+    assert.equal(screen.focused.getValue(), filter)
+    await key('\r')
+    assert.deepEqual(added.at(-1), {scope: `app:${app.id}`, value: filter})
+  }
+
+  d.api.appData = async id => ({...await appData(id), coupling: null, errors: {coupling: 'Forbidden'}})
+  await d.openApp(staging)
+  await d.openLogs()
+  await key('/')
+  await key('\x10')
+  assert.equal(screen.focused.getValue(), '')
+  await key('unavailable pipeline')
+  await key('\r')
+  assert.equal(added.length, 3, 'Unavailable coupling must not write to standalone history')
+})
+
 test('log highlights use contrasting text in both themes and restore original colors outside matches', async t => {
   for (const theme of ['dark', 'light']) {
     const {dashboard: d, screen, key} = await harness(t, {demo: false, theme,
@@ -2390,6 +2563,7 @@ test('log streams and filter editors are cleaned up on app or pipeline navigatio
     const execution = Promise.withResolvers()
     let options
     const {dashboard: d, screen, key} = await harness(t, {demo: false,
+      logFilterHistory: {entries() { return ['error'] }, add() { assert.fail('Canceled filter editors must not save history') }},
       executeHeroku: (_args, value) => { options = value; return execution.promise }})
     await d.openApp(d.rows[0].value)
     const running = d.openLogs()

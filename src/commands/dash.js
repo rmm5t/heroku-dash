@@ -3,6 +3,7 @@ import {Flags} from '@oclif/core'
 import {HerokuAPI} from '../api.js'
 import {loadCommandHistory} from '../command-history.js'
 import {appConfirmCommands} from '../heroku-command.js'
+import {loadLogFilterHistory} from '../log-filter-history.js'
 import {inspectProject, resolveContext} from '../project.js'
 import {loadResourcesIntegration} from '../resources.js'
 
@@ -55,11 +56,12 @@ export default class Dash extends Command {
     const api = new HerokuAPI(this.heroku, {readOnly: flags['read-only']})
     const [catalog, project] = await Promise.all([api.catalog(), inspectProject()])
     const context = await resolveContext(api, catalog, flags, project)
-    const [resources, commandHistory] = await Promise.all([
+    const [resources, commandHistory, logFilterHistory] = await Promise.all([
       loadResourcesIntegration(this.config, api),
       loadCommandHistory(this.config.configDir),
+      loadLogFilterHistory(this.config.configDir),
     ])
     await runDashboard({api, catalog, context, resources, refresh: flags.refresh, theme: flags.theme,
-      appConfirm: appConfirmCommands(this.config.commands), commandHistory})
+      appConfirm: appConfirmCommands(this.config.commands), commandHistory, logFilterHistory})
   }
 }
