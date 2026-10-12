@@ -279,7 +279,7 @@ Metrics load on opening the tab and refresh with the current app while the tab i
 
 Availability depends on app permissions, dyno tier, generation, and metric collection. Eco does not provide application metrics. Cedar dyno-load averages differ from Fir CPU usage; this version does not request a separate Fir CPU-utilization series. Endpoint failures appear alongside working metrics.
 
-Press **`o`** on a memory, dyno-load, or process-health row to open that process type’s web metrics page (for example, `web` or `worker`). Throughput, latency, and app-wide summary rows open the app’s general metrics dashboard.
+Press **`o`** on a memory or dyno-load row to open that process type’s web metrics page (for example, `web` or `worker`). Throughput, latency, and app-wide summary rows open the app’s general metrics dashboard. Both preserve the selected timeframe: Past 2, 24, or 72 hours, or 7 days.
 
 Platform snapshots remain below the performance rows: configured/healthy dyno counts, process state, and recent releases. `up` and `idle` formation dynos count as healthy, and one-off processes are excluded from formation health. During deploys, overlapping dynos can exceed the desired count.
 

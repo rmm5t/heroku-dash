@@ -885,7 +885,7 @@ test('o reports unavailable add-on links and browser errors without opening a ge
   assert.equal(d.loadingTimer, null)
 })
 
-test('o in Metrics opens the selected process metrics, with app-wide rows using the generic page', async t => {
+test('o in Metrics opens the selected process or app-wide metrics with the selected timeframe', async t => {
   const opened = []
   const {dashboard: d, key} = await harness(t, {openURL: async url => { opened.push(url) }})
   await key('\r')
@@ -903,14 +903,19 @@ test('o in Metrics opens the selected process metrics, with app-wide rows using 
     ['health', 'metrics'],
     ['snapshot', 'metrics'],
   ]
-  for (const [id, path] of cases) {
-    const index = d.rows.findIndex(row => row.id === id)
-    assert.ok(index >= 0, `Metrics row ${id} must be available`)
-    d.main.select(index)
-    await key('o')
-    assert.equal(opened.at(-1), `https://dashboard.heroku.com/apps/constellation-staging/${path}`)
+  for (const hours of [2, 24, 72, 168]) {
+    assert.equal(d.metricsWindowHours, hours)
+    for (const [id, path] of cases) {
+      const index = d.rows.findIndex(row => row.id === id)
+      assert.ok(index >= 0, `Metrics row ${id} must be available`)
+      d.main.select(index)
+      await key('o')
+      assert.equal(opened.at(-1), `https://dashboard.heroku.com/apps/constellation-staging/${path}?starting=${hours}-hours-ago&ending=0-hours-ago`)
+    }
+    await key('T')
   }
-  assert.equal(opened.length, cases.length)
+  assert.equal(d.metricsWindowHours, 2)
+  assert.equal(opened.length, cases.length * 4)
   assert.equal(d.openingBrowser, false)
   assert.equal(d.loadingTimer, null)
 })

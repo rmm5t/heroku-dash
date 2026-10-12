@@ -1524,6 +1524,10 @@ export class Dashboard {
       const path = TAB_DEFINITIONS[tab].browserPath
       const processType = TABS[tab] === 'Metrics' ? row?.processType : null
       url = `https://dashboard.heroku.com/apps/${encodeURIComponent(app.name)}/${path}${processType ? `/${encodeURIComponent(processType)}` : ''}`
+      if (TABS[tab] === 'Metrics') {
+        const query = new URLSearchParams({starting: `${this.metricsWindowHours}-hours-ago`, ending: '0-hours-ago'})
+        url += `?${query}`
+      }
     } else if (this.pipeline) url = `https://dashboard.heroku.com/pipelines/${encodeURIComponent(this.pipeline.id)}`
     else if (this.team) url = `https://dashboard.heroku.com/teams/${encodeURIComponent(this.team.name)}/apps`
     else url = 'https://dashboard.heroku.com/apps'
