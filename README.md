@@ -49,7 +49,7 @@ heroku dash --remote staging           # App attached to a specific Git remote
 heroku dash --team my-team             # Start in a team
 heroku dash --team my-team --pipeline my-pipeline
 heroku dash --read-only                # Disable all remote changes
-heroku dash --refresh 60               # Refresh the current app every minute
+heroku dash --refresh 30               # Refresh the current app every 30s
 heroku dash --refresh 0                # Manual refresh only
 ```
 
@@ -69,7 +69,7 @@ Each explicit command-line option overrides its matching environment variable. T
 export HEROKU_DASH_TEAM=my-team
 export HEROKU_DASH_REFRESH=120
 heroku dash                            # Browse my-team; refresh every two minutes
-heroku dash --pipeline my-pipeline --refresh 60  # Open my-pipeline within my-team
+heroku dash --pipeline my-pipeline --refresh 30  # Open my-pipeline within my-team
 ```
 
 ### Color themes
