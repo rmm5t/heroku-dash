@@ -8,8 +8,9 @@ export function telemetryRows(data, state = {}) {
   const snapshot = state.snapshot
   const windowLabel = metricsTimeframe(snapshot?.windowHours ?? state.windowHours ?? 2).label
   const rows = []
-  const add = ({id, title, scope, processType, metric, values = [], unit = '', errorKey, note, reference, extra = () => []}) => {
+  const add = ({id, title, scope, processType, metric, values = [], unit = '', summary = 'latest', errorKey, note, reference, extra = () => []}) => {
     const stats = summarizeSeries(metric, values)
+    const value = stats[summary]
     const error = state.error ?? snapshot?.errors[errorKey]
     const stale = stats.time !== null && Date.now() - (stats.time + metric.stepMinutes * 60_000) > metric.stepMinutes * 120_000
     const status = error ? stats.count ? 'Stale' : 'Unavailable' : !snapshot ? 'Loading…' : !stats.count ? 'No samples' : stale ? 'Stale' : null
@@ -34,16 +35,16 @@ export function telemetryRows(data, state = {}) {
       ...(snapshot ? [field('Fetched', snapshot.fetchedAt)] : []),
       '', note,
     ].join('\n')
-    rows.push({id: `telemetry:${id}`, processType, label: single(`${title} · ${scope} · ${format(stats.latest, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
+    rows.push({id: `telemetry:${id}`, processType, label: single(`${title} · ${scope} · ${format(value, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
       metricChart: {title, scope, metric, values, unit, stats, reference, windowLabel, state: status ?? 'Recent', details: clean(facts)},
       icon: title.startsWith('Latency') ? 'clock' : 'metrics', tone: status === 'Stale' ? 'warning' : error ? 'error' : status ? 'muted' : 'info',
-      columns: [title, scope, format(stats.latest, unit, true), status ?? sparkline(values, 24)], emphasis: status,
+      columns: [title, scope, format(value, unit, true), status ?? sparkline(values, 24)], emphasis: status,
     })
   }
 
   const status = snapshot?.router.status
   const requests = requestSeries(status)
-  add({id: 'throughput', title: 'Throughput', scope: 'HTTP', metric: status, values: requests.rpm, unit: 'req/min', errorKey: 'router.status',
+  add({id: 'throughput', title: 'Throughput', scope: 'HTTP', metric: status, values: requests.rpm, unit: 'req/min', summary: 'mean', errorKey: 'router.status',
     note: 'Request counts are divided by the response bucket duration.\nAverages use observed buckets only; missing traffic data is not assumed to be zero.',
     extra: stats => {
       const counts = summarizeSeries(status, requests.counts)
@@ -57,7 +58,7 @@ export function telemetryRows(data, state = {}) {
   for (const percentile of ['p50', 'p95', 'p99']) {
     const comparison = {p95: 'p50', p99: 'p95'}[percentile]
     add({id: `latency:${percentile}`, title: `Latency ${percentile}`, scope: 'HTTP', metric: latency,
-      values: latency?.series[`latency.ms.${percentile}`], unit: 'ms', errorKey: 'router.latency',
+      values: latency?.series[`latency.ms.${percentile}`], unit: 'ms', summary: 'mean', errorKey: 'router.latency',
       reference: comparison ? {label: comparison, values: latency?.series[`latency.ms.${comparison}`], tone: 'info', aggregation: 'mean'} : undefined,
       note: 'Percentiles describe individual time buckets. The mean/min/max above summarize bucket percentiles; they are not whole-window request percentiles.',
       extra: stats => [field('Bucket max latency', format(stats.index === null ? null : latency.series['latency.ms.max']?.[stats.index], 'ms'))],

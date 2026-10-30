@@ -293,6 +293,42 @@ test('performance rows display measured units, matching memory quota, and bucket
   assert.match(rows[0].detail, /req\/min/)
 })
 
+test('Metrics shows timeframe means for HTTP rows and latest values for memory and load', async () => {
+  const {api, catalog} = createDemo()
+  const data = await api.appData(catalog.apps[0].id)
+  for (const hours of [2, 24, 72, 168]) {
+    const snapshot = demoTelemetry(data, Date.now(), hours)
+    const status = snapshot.router.status
+    for (const values of Object.values(status.series)) values.fill(null)
+    status.series['200'].splice(-3, 3, 0, 60 * status.stepMinutes, 120 * status.stepMinutes)
+    for (const [percentile, mean] of [['p50', 30], ['p95', 60], ['p99', 90]]) {
+      snapshot.router.latency.series[`latency.ms.${percentile}`].fill(null).splice(-3, 3, 0, mean, mean * 2)
+    }
+    const memory = snapshot.processes.web.memory.series['memory.swap-plus-rss.bytes.mean']
+    memory.fill(64 * 1024 ** 2)
+    memory[memory.length - 1] = 128 * 1024 ** 2
+    const load = snapshot.processes.web.load.series['load.avg.1m.mean']
+    load.fill(1)
+    load[load.length - 1] = 3
+
+    const rows = appRows('Metrics', data, {metrics: {snapshot}})
+    const throughput = rows.find(row => row.id === 'telemetry:throughput')
+    assert.equal(throughput.columns[2], '60 rpm')
+    assert.match(throughput.label, /60 req\/min$/)
+    assert.match(throughput.detail, /Latest\s+120 req\/min/)
+    assert.match(throughput.detail, /Mean of buckets\s+60 req\/min/)
+    for (const [percentile, mean] of [['p50', 30], ['p95', 60], ['p99', 90]]) {
+      const latency = rows.find(row => row.id === `telemetry:latency:${percentile}`)
+      assert.equal(latency.columns[2], `${mean} ms`)
+      assert.ok(latency.label.endsWith(`${mean} ms`))
+      assert.equal(latency.metricChart.stats.latest, mean * 2)
+      assert.equal(latency.metricChart.stats.mean, mean)
+    }
+    assert.equal(rows.find(row => row.id === 'telemetry:memory:web').columns[2], '128 MiB')
+    assert.equal(rows.find(row => row.id === 'telemetry:load:web').columns[2], '3')
+  }
+})
+
 test('performance rows distinguish missing samples, endpoint errors, and stale readings', async () => {
   const {api, catalog} = createDemo()
   const data = await api.appData(catalog.apps[0].id)
