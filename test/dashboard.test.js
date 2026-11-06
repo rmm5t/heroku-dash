@@ -3450,7 +3450,7 @@ test('invalid config keys stop before the value prompt with the config-specific 
   }
 })
 
-test('config name and masked value prompts support readline editing and require app-name confirmation', async t => {
+test('config name and visible value prompts support readline editing and require app-name confirmation', async t => {
   const demo = createDemo()
   demo.api.readOnly = false
   const writes = []
@@ -3465,34 +3465,43 @@ test('config name and masked value prompts support readline editing and require 
   assert.equal(d.modal.children.find(child => child.type === 'textbox').getValue(), 'NEW_SECRET')
   await key('\r')
   const input = d.modal.children.find(child => child.type === 'textbox')
-  const assertMasked = (value, cursor = [...value].length) => {
+  const assertVisible = (value, cursor = [...value].length) => {
     assert.equal(input.getValue(), value)
-    assert.equal(input.content, '*'.repeat([...value].length))
-    assert.equal(screen.program.x, input.lpos.xi + input.ileft + cursor)
-    const visible = screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')
-    assert.ok(!visible.includes('display-'))
-    assert.ok(!visible.includes('密'))
-    assert.ok(!visible.includes('🔑'))
+    assert.equal(input.content, value)
+    assert.equal(input.censor, false)
+    assert.equal(screen.program.x, input.lpos.xi + input.ileft + blessed.unicode.strWidth([...value].slice(0, cursor).join('')))
   }
   await key('display-密🔑')
-  assertMasked('display-密🔑')
+  assertVisible('display-密🔑')
   await key('\x01')
-  assertMasked('display-密🔑', 0)
+  assertVisible('display-密🔑', 0)
   await key('never-')
-  assertMasked('never-display-密🔑', 6)
+  assertVisible('never-display-密🔑', 6)
   await key('\x05\x02\x02\x0b')
-  assertMasked('never-display-')
+  assertVisible('never-display-')
   await key('\x19')
-  assertMasked('never-display-密🔑')
+  assertVisible('never-display-密🔑')
   await key('\x17')
-  assertMasked('')
+  assertVisible('')
   await key('\x19')
-  assertMasked('never-display-密🔑')
+  assertVisible('never-display-密🔑')
   await key('\r')
   assert.equal(writes.length, 0)
   await key('constellation-staging')
   await key('\r')
   assert.deepEqual(writes, [['constellation-staging', 'NEW_SECRET', 'never-display-密🔑', 'constellation-staging']])
+  assert.equal(d.modal, null)
+  const existingKey = d.rows[d.main.selected].key
+  await key('e')
+  const editInput = d.modal.children.find(child => child.type === 'textbox')
+  await key('replacement-value')
+  assert.equal(editInput.censor, false)
+  assert.equal(editInput.content, 'replacement-value')
+  await key('\r')
+  assert.equal(writes.length, 1)
+  await key('constellation-staging')
+  await key('\r')
+  assert.deepEqual(writes[1], ['constellation-staging', existingKey, 'replacement-value', 'constellation-staging'])
   assert.equal(d.modal, null)
 })
 

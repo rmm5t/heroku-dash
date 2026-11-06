@@ -1305,7 +1305,7 @@ export class Dashboard {
     if (!key) return
     try { validateConfigKey(key, 'Invalid config variable name.') }
     catch (error) { this.setStatus(errorMessage(error), 'warning'); return }
-    const value = await this.prompt('Config variable · value', `${app.name} / ${key}\nEnter a new single-line value (input is masked; blank is an empty string).`, '', {secret: true})
+    const value = await this.prompt('Config variable · value', `${app.name} / ${key}\nEnter a new single-line value (blank is an empty string).`)
     if (value === null) return
     const confirmation = await this.confirm(app, `${Object.hasOwn(this.config, key) ? 'Replace' : 'Create'} config variable ${key}.\nThis creates a release and restarts the app.`)
     if (confirmation) await this.mutate(() => this.api.setConfig(app.name, key, value, confirmation))

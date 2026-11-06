@@ -189,7 +189,7 @@ App actions:
 | `C` | Any app view | Open the default app console |
 | `L` / `Shift-L` | Any app view | Open a live log viewer for the current app |
 
-In every text prompt, `Enter` continues and `Esc` cancels. Readline-style editing supports `Ctrl-A` / `Ctrl-E`, `Ctrl-B` / `Ctrl-F`, `Ctrl-T`, `Ctrl-U` / `Ctrl-K`, `Ctrl-W` / `Ctrl-Y`, and `Alt-B` / `Alt-F` / `Alt-D`. `Ctrl-U` kills text to the left of the cursor; `Ctrl-Y` restores the last killed text. Config-value input is masked. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
+In every text prompt, `Enter` continues and `Esc` cancels. Readline-style editing supports `Ctrl-A` / `Ctrl-E`, `Ctrl-B` / `Ctrl-F`, `Ctrl-T`, `Ctrl-U` / `Ctrl-K`, `Ctrl-W` / `Ctrl-Y`, and `Alt-B` / `Alt-F` / `Alt-D`. `Ctrl-U` kills text to the left of the cursor; `Ctrl-Y` restores the last killed text. Config-value input is visible while typing. Editing replaces the complete value and currently supports single-line input; existing multiline values can be inspected but should be edited through the standard CLI or web dashboard.
 
 The release history is requested newest-first with a 100-release page limit and automatic pagination disabled. Dash also caps retained and displayed releases at 100, so long histories do not trigger additional release-page requests during refresh. Overview uses the same recent-release window.
 
