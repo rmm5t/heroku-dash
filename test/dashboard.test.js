@@ -3465,6 +3465,7 @@ test('config name and visible value prompts support readline editing and require
   assert.equal(d.modal.children.find(child => child.type === 'textbox').getValue(), 'NEW_SECRET')
   await key('\r')
   const input = d.modal.children.find(child => child.type === 'textbox')
+  assert.equal(input.getValue(), '')
   const assertVisible = (value, cursor = [...value].length) => {
     assert.equal(input.getValue(), value)
     assert.equal(input.content, value)
@@ -3492,16 +3493,22 @@ test('config name and visible value prompts support readline editing and require
   assert.deepEqual(writes, [['constellation-staging', 'NEW_SECRET', 'never-display-密🔑', 'constellation-staging']])
   assert.equal(d.modal, null)
   const existingKey = d.rows[d.main.selected].key
+  d.config[existingKey] = 'current-密🔑'
   await key('e')
   const editInput = d.modal.children.find(child => child.type === 'textbox')
-  await key('replacement-value')
+  assert.equal(editInput.getValue(), 'current-密🔑')
+  assert.equal(editInput.content, 'current-密🔑')
+  await key('\x01')
+  await key('updated-')
+  await key('\x05')
+  await key('-value')
   assert.equal(editInput.censor, false)
-  assert.equal(editInput.content, 'replacement-value')
+  assert.equal(editInput.content, 'updated-current-密🔑-value')
   await key('\r')
   assert.equal(writes.length, 1)
   await key('constellation-staging')
   await key('\r')
-  assert.deepEqual(writes[1], ['constellation-staging', existingKey, 'replacement-value', 'constellation-staging'])
+  assert.deepEqual(writes[1], ['constellation-staging', existingKey, 'updated-current-密🔑-value', 'constellation-staging'])
   assert.equal(d.modal, null)
 })
 
