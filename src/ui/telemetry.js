@@ -4,13 +4,20 @@ import {metricNumber as number, metricValue as format} from './metric-format.js'
 
 const field = (name, value) => `${name.padEnd(18)} ${value}`
 
+function summaryValue(value, unit) {
+  if (!Number.isFinite(value)) return '—'
+  if (unit === 'bytes') return `${number(Math.round(value / 1024 ** 2))} MiB`
+  if (unit === 'ms' || unit === 'req/min') return `${number(Math.round(value))} ${unit === 'req/min' ? 'rpm' : unit}`
+  return format(value, unit)
+}
+
 export function telemetryRows(data, state = {}) {
   const snapshot = state.snapshot
   const windowLabel = metricsTimeframe(snapshot?.windowHours ?? state.windowHours ?? 2).label
   const rows = []
   const add = ({id, title, scope, processType, metric, values = [], unit = '', summary = 'latest', errorKey, note, reference, extra = () => []}) => {
     const stats = summarizeSeries(metric, values)
-    const value = stats[summary]
+    const value = summaryValue(stats[summary], unit)
     const error = state.error ?? snapshot?.errors[errorKey]
     const stale = stats.time !== null && Date.now() - (stats.time + metric.stepMinutes * 60_000) > metric.stepMinutes * 120_000
     const status = error ? stats.count ? 'Stale' : 'Unavailable' : !snapshot ? 'Loading…' : !stats.count ? 'No samples' : stale ? 'Stale' : null
@@ -35,10 +42,10 @@ export function telemetryRows(data, state = {}) {
       ...(snapshot ? [field('Fetched', snapshot.fetchedAt)] : []),
       '', note,
     ].join('\n')
-    rows.push({id: `telemetry:${id}`, processType, label: single(`${title} · ${scope} · ${format(value, unit)}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
+    rows.push({id: `telemetry:${id}`, processType, label: single(`${title} · ${scope} · ${value}`), detail: clean(`${title}\n${field('Scope', scope)}\n\n${facts}`),
       metricChart: {title, scope, metric, values, unit, stats, reference, windowLabel, state: status ?? 'Recent', details: clean(facts)},
       icon: title.startsWith('Latency') ? 'clock' : 'metrics', tone: status === 'Stale' ? 'warning' : error ? 'error' : status ? 'muted' : 'info',
-      columns: [title, scope, format(value, unit, true), status ?? sparkline(values, 24)], emphasis: status,
+      columns: [title, scope, value, status ?? sparkline(values, 24)], emphasis: status,
     })
   }
 

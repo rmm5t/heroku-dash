@@ -255,9 +255,9 @@ The **Metrics (`7`)** view reads Heroku's separate **`api.metrics.heroku.com`** 
 
 | Metric | Display |
 | --- | --- |
-| Throughput | Mean requests/minute (`rpm`) across the selected timeframe, derived from HTTP status-code counts; Details also shows latest requests/sec, observed request/error counts, and the observed 5xx rate |
-| Response time | Mean of completed-bucket p50, p95, and p99 latency values across the selected timeframe, in milliseconds, with latest values and maximum latency in Details |
-| Memory | Latest completed bucket's mean RSS + swap usage in MiB (or reported mean used memory when that series is unavailable); Details includes matching-bucket quota, usage percentage, RSS/swap maxima, and total maximum |
+| Throughput | Mean requests/minute (`rpm`) across the selected timeframe, rounded to the nearest rpm and derived from HTTP status-code counts; Details also shows latest requests/sec, observed request/error counts, and the observed 5xx rate |
+| Response time | Mean of completed-bucket p50, p95, and p99 latency values across the selected timeframe, rounded to the nearest millisecond, with latest values and maximum latency in Details |
+| Memory | Latest completed bucket's mean RSS + swap usage rounded to the nearest MiB (or reported mean used memory when that series is unavailable); Details includes matching-bucket quota, usage percentage, RSS/swap maxima, and total maximum |
 | Dyno load | Latest completed bucket's mean one-minute load average per process type, with the bucket maximum in Details; this is runnable CPU work, **not CPU utilization percent** |
 
 Rows include a compact sparkline. The **Mean / Latest** column shows timeframe means for Throughput and latency, and latest values for Memory and Dyno load. Select a row for a **colored, multi-line chart** in Details, with a value axis, UTC time labels, and latest/mean/min/max summaries. The Metrics layout gives Details extra vertical space, and charts resize with the terminal. Press **`T`** (`Shift-T`) in Metrics to cycle **Past 2 hours** (default), **Past 24 hours**, **Past 72 hours**, and **Past 7 days**. These use Heroku’s one-minute, ten-minute, one-hour, and two-hour resolutions respectively. Multi-day charts include dates on the UTC time axis. Basic/Hobby dynos use ten-minute buckets and have a 24-hour history limit; longer ranges show unavailable metrics for those dynos. Memory/load are fetched for active formation types and configured `web` processes, rather than for ephemeral one-off dynos.
